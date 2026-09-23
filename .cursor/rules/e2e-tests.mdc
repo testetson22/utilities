@@ -40,6 +40,8 @@ When adding a new service provider, add `sp_{provider}_{concern}_test.go` (e.g. 
 | `DCM_GATEWAY_URL` | `http://localhost:8080/api/v1alpha1` | Control plane API |
 | `DCM_CONTAINER_SP_URL` | `http://localhost:8082/api/v1alpha1` | Container SP direct API |
 | `DCM_ACM_CLUSTER_SP_URL` | `http://localhost:8083/api/v1alpha1` | ACM Cluster SP direct API |
+| `DCM_OSAC_SP_URL` | `http://localhost:8091/api/v1alpha1` | OSAC SP direct API (cluster + VM) |
+| `DCM_ENVIRONMENT_AGENT_URL` | `http://localhost:8090/api/v1alpha1` | Environment agent API |
 | `DCM_NATS_URL` | `nats://localhost:4222` | NATS for status events |
 | `DCM_CLI_PATH` | (auto-resolved) | CLI binary path |
 | `DCM_CONTAINER_PROVIDER_NAME` | (first container provider) | Target a specific container provider in core platform tests |
@@ -104,3 +106,5 @@ When testing message ordering via NATS, comment whether the test relies on singl
 SP compose overrides are managed by the provider registry (`providers/*.conf`). Each provider's `COMPOSE_OVERRIDE` key specifies its overlay file, which `deploy-dcm.sh` injects automatically when the provider is enabled:
 - `tests/compose-sp-test.yaml` — publishes container SP port 8082 (via `k8s-container.conf`)
 - `tests/compose-acm-cluster-sp.yaml` — adds the ACM cluster SP service on port 8083 (via `acm-cluster.conf`)
+- `tests/compose-environment-agent-test.yaml` — defines full environment-agent service on port 8090 (via `environment-agent.conf`; self-contained, no base compose.yaml dependency)
+- `tests/compose-osac-sp.yaml` — defines full OSAC SP service on port 8091 (via `osac.conf`; registers with environment-agent at `DCM_REGISTRATION_URL: http://environment-agent:8080`)

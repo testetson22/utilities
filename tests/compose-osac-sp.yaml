@@ -1,0 +1,35 @@
+# Defines and publishes the OSAC service provider for E2E testing.
+#
+# Self-contained — defines the full service so this works without
+# control-plane having the osac-service-provider compose profile.
+# Injected automatically by deploy-dcm.sh via the provider registry
+# (providers/osac.conf → COMPOSE_OVERRIDE).
+#
+# Credentials (SP_OSAC_FULFILLMENT_ADDRESS, SP_OSAC_OIDC_ISSUER_URL,
+# SP_OSAC_OIDC_CLIENT_ID, SP_OSAC_OIDC_CLIENT_SECRET) must be set in
+# the shell or deploy/.env before deploying. The validate_osac_provider
+# hook in deploy-dcm.sh fails fast if any are missing.
+
+services:
+  osac-service-provider:
+    image: quay.io/dcm-project/osac-service-provider:${OSAC_SERVICE_PROVIDER_VERSION:-main}
+    pull_policy: always
+    environment:
+      SP_ENDPOINT: "http://osac-service-provider:8080"
+      SP_PROVIDER_CLUSTER_NAME: ${OSAC_SP_CLUSTER_NAME:-osac-sp-cluster}
+      SP_PROVIDER_VM_NAME: ${OSAC_SP_VM_NAME:-osac-sp-vm}
+      # Registers with environment-agent (DD-203), not control-plane directly.
+      DCM_REGISTRATION_URL: "http://environment-agent:8080"
+      DCM_NATS_URL: "nats://nats:4222"
+      SP_OSAC_FULFILLMENT_ADDRESS: ${SP_OSAC_FULFILLMENT_ADDRESS}
+      SP_OSAC_OIDC_ISSUER_URL: ${SP_OSAC_OIDC_ISSUER_URL}
+      SP_OSAC_OIDC_CLIENT_ID: ${SP_OSAC_OIDC_CLIENT_ID}
+      SP_OSAC_OIDC_CLIENT_SECRET: ${SP_OSAC_OIDC_CLIENT_SECRET}
+      SP_OSAC_TLS_CERT_FILE: ${SP_OSAC_TLS_CERT_FILE:-}
+    ports:
+      - "8091:8080"
+    depends_on:
+      environment-agent:
+        condition: service_started
+      nats:
+        condition: service_started

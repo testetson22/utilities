@@ -1,0 +1,36 @@
+# Defines and publishes the environment-agent for E2E testing.
+#
+# Self-contained — defines the full service so this works without
+# environment-agent being present in control-plane's compose.yaml.
+# Injected automatically by deploy-dcm.sh via the provider registry
+# (providers/environment-agent.conf → COMPOSE_OVERRIDE).
+
+services:
+  environment-agent:
+    image: quay.io/dcm-project/environment-agent:${ENVIRONMENT_AGENT_VERSION:-main}
+    pull_policy: always
+    environment:
+      AGENT_NAME: ${AGENT_NAME:-local-agent}
+      AGENT_ENVIRONMENT: ${AGENT_ENVIRONMENT:-dev}
+      AGENT_COST: ${AGENT_COST:-low}
+      # Base URL only — agent appends /api/v1alpha1/agents for registration.
+      DCM_REGISTRATION_URL: "http://control-plane:8080"
+      AGENT_MESSAGING_URL: "nats://nats:4222"
+      AGENT_EMBEDDED_SPS: ${AGENT_EMBEDDED_SPS:-}
+      SP_DEFAULT_KUBECONFIG: /kubeconfig
+      SP_CONTAINER_NAMESPACE: ${SP_CONTAINER_NAMESPACE:-default}
+      SP_VM_NAMESPACE: ${SP_VM_NAMESPACE:-default}
+      SP_CLUSTER_NAMESPACE: ${SP_CLUSTER_NAMESPACE:-}
+      SP_STORAGE_NAMESPACE: ${SP_STORAGE_NAMESPACE:-default}
+      SP_K8S_EXTERNAL_SVC_TYPE: ${SP_K8S_EXTERNAL_SVC_TYPE:-NodePort}
+      SP_K8S_DEFAULT_STORAGE_CLASS: ${SP_K8S_DEFAULT_STORAGE_CLASS:-}
+      SP_K8S_DEFAULT_ACCESS_MODE: ${SP_K8S_DEFAULT_ACCESS_MODE:-ReadWriteOnce}
+      SP_PULL_SECRET: ${SP_PULL_SECRET:-}
+      SP_BASE_DOMAIN: ${SP_BASE_DOMAIN:-}
+    ports:
+      - "8090:8080"
+    depends_on:
+      control-plane:
+        condition: service_started
+      nats:
+        condition: service_started
