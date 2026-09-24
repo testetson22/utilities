@@ -16,6 +16,11 @@ const (
 
 	// containerMultiErrorDetail matches k8s-container-service-provider httperror.InvalidArgumentMultiDetail.
 	containerMultiErrorDetail = "multiple validation errors, see the errors array for details"
+
+	// osacBadRequestTitle is the RFC 9457 title that the OSAC service provider returns
+	// for input-validation errors. It differs from invalidArgumentTitle ("Invalid argument")
+	// used by other SPs — the OSAC SP uses the HTTP status phrase ("Bad Request") as its title.
+	osacBadRequestTitle = "Bad Request"
 )
 
 // ProblemDetail is the RFC 9457 core fields shared by DCM service providers.

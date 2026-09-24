@@ -39,8 +39,10 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
 		})
 
-		It("rejects a body missing the boot disk with 400", func() {
+		It("rejects a body missing the boot disk with 400 or 422", func() {
 			// REQ-VMCREATE-030/060: exactly one disk named 'boot' is required.
+			// 400 (bad request) or 422 (unprocessable entity) are both acceptable
+			// for schema/business-rule violations depending on the SP implementation.
 			resp, err := doOsacVMRequest(http.MethodPost, "/vms?id=e2e-vm-no-boot",
 				`{"spec":{"storage":{"disks":[{"name":"data","capacity":"50GB"}]},"guest_os":{"type":"rhel-9"},"metadata":{"name":"e2e"},"provider_hints":{"osac":{"template_id":"t","instance_type":"s-4-16"}}}}`)
 			Expect(err).NotTo(HaveOccurred())
@@ -51,7 +53,7 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 			))
 		})
 
-		It("rejects a body missing provider_hints.osac.template_id with 400", func() {
+		It("rejects a body missing provider_hints.osac.template_id with 400 or 422", func() {
 			resp, err := doOsacVMRequest(http.MethodPost, "/vms?id=e2e-vm-no-template",
 				`{"spec":{"storage":{"disks":[{"name":"boot","capacity":"50GB"}]},"guest_os":{"type":"rhel-9"},"metadata":{"name":"e2e"},"provider_hints":{"osac":{"instance_type":"s-4-16"}}}}`)
 			Expect(err).NotTo(HaveOccurred())
@@ -62,7 +64,7 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 			))
 		})
 
-		It("rejects a body missing provider_hints.osac.instance_type with 400", func() {
+		It("rejects a body missing provider_hints.osac.instance_type with 400 or 422", func() {
 			resp, err := doOsacVMRequest(http.MethodPost, "/vms?id=e2e-vm-no-itype",
 				`{"spec":{"storage":{"disks":[{"name":"boot","capacity":"50GB"}]},"guest_os":{"type":"rhel-9"},"metadata":{"name":"e2e"},"provider_hints":{"osac":{"template_id":"t"}}}}`)
 			Expect(err).NotTo(HaveOccurred())
@@ -97,7 +99,7 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 			expectRFC9457Problem(resp, problemDetailExpectation{
 				Status:     http.StatusBadRequest,
 				TypeSuffix: "invalid-argument",
-				Title:      invalidArgumentTitle,
+				Title:      osacBadRequestTitle,
 			})
 		})
 
@@ -113,16 +115,22 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 			resp, err := doOsacVMRequest(http.MethodGet, "/vms", "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusBadGateway {
+				Skip("OSAC backend not reachable (502) — cannot verify VM list response shape (AEP-132)")
+			}
 			Expect(resp.StatusCode).To(Equal(http.StatusOK))
 
-			// AEP-132 contract: key must be 'results', not 'vms'.
-			// Read raw bytes and check the exact key name before decoding into the typed struct.
+			// AEP-132 contract: key must be 'results', not 'vms', and the value
+			// must be a JSON array (not null or an object).
 			raw := readBody(resp)
 			var keyed map[string]json.RawMessage
 			Expect(json.Unmarshal(raw, &keyed)).To(Succeed())
 			_, hasResults := keyed["results"]
 			Expect(hasResults).To(BeTrue(),
 				"VM list response must use 'results' key (AEP-132), not 'vms' or another key")
+			var arr []json.RawMessage
+			Expect(json.Unmarshal(keyed["results"], &arr)).To(Succeed(),
+				"results value must be a JSON array, not null or an object")
 		})
 
 	})
@@ -139,6 +147,9 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 				"/vms/00000000-e2e0-4000-8000-delete0vm0000", "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusBadGateway {
+				Skip("OSAC backend not reachable (502) — cannot verify delete-idempotency behaviour (REQ-DELETE-020)")
+			}
 			Expect(resp.StatusCode).To(Equal(http.StatusNoContent),
 				"OSAC SP delete on non-existent VM must return 204, not 404 (REQ-DELETE-020)")
 		})
@@ -190,7 +201,9 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 			Expect(vmID).NotTo(BeEmpty(), "create response should include an id or path")
 		})
 
-		It("create with the same id is idempotent", func() {
+		It("create with the same id is idempotent and returns the original resource", func() {
+			// REQ-VMCREATE-070: retry with same id returns existing state, not an error.
+			// The response must identify the same resource (same id), not a new one.
 			name := uniqueName("e2e-osac-vm")
 			resp, err := doOsacVMRequest(http.MethodPost,
 				fmt.Sprintf("/vms?id=%s", vmID),
@@ -199,6 +212,11 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 			defer resp.Body.Close()
 			Expect(resp.StatusCode).To(SatisfyAny(Equal(http.StatusCreated), Equal(http.StatusOK)),
 				"duplicate create should return existing state (REQ-VMCREATE-070), not an error")
+			var dupeResp osacCreateResponse
+			decodeJSON(resp, &dupeResp)
+			dupeID := osacIDFromCreateResponse(dupeResp)
+			Expect(dupeID).To(Equal(vmID),
+				"idempotent create must return the original resource id %q, not a new id %q (REQ-VMCREATE-070)", vmID, dupeID)
 		})
 
 		It("get returns the VM with a valid status and IP fields", func() {

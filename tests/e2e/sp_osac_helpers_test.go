@@ -114,8 +114,10 @@ type osacCluster struct {
 }
 
 // osacClusterListResponse is the body returned by GET /clusters.
+// The OSAC SP follows AEP-132 and wraps the list in a "results" key,
+// consistent with the VM list endpoint. (Verified against live SP.)
 type osacClusterListResponse struct {
-	Clusters []osacCluster `json:"clusters"`
+	Results []osacCluster `json:"results"`
 }
 
 // osacVM is a single VM resource from GET /vms/{id} or a list entry.

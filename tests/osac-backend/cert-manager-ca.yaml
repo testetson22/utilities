@@ -1,0 +1,40 @@
+# CA chain — vendored verbatim from dcm-project/osac-service-provider
+# test/e2e/manifests-tierb/cert-manager-ca.yaml
+#
+# Creates:
+#   - A self-signed Issuer in the cert-manager namespace (used only to sign the CA cert itself)
+#   - The osac-ca Certificate in cert-manager namespace (the CA cert)
+#   - The osac-ca ClusterIssuer (cluster-scoped, signs all other certs in the stack)
+#
+# Applied by deploy-osac-backend.sh BEFORE all other manifests.
+# cert-manager must already be installed.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  namespace: cert-manager
+  name: osac-ca
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  namespace: cert-manager
+  name: osac-ca
+spec:
+  commonName: OSAC CA
+  isCA: true
+  issuerRef:
+    kind: Issuer
+    name: osac-ca
+  secretName: osac-ca
+  privateKey:
+    rotationPolicy: Always
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: osac-ca
+spec:
+  ca:
+    secretName: osac-ca

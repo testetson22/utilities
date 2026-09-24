@@ -189,12 +189,15 @@ make test-smoke            # Run smoke tests only (health checks + CLI version)
 make test-cli              # Run CLI tests only
 make test-sp               # Run container SP tests (SP must be deployed)
 make test-acm-sp           # Run ACM cluster SP tests (ACM SP must be deployed)
+make test-osac-sp          # Run OSAC SP tests (--environment-agent --osac-service-provider required)
 make test-core             # Run core platform tests (full control plane provisioning flow)
 make test-rehydration      # Run all rehydration tests (multi-provider + podman required)
 make test-rehydration-safe # Run non-disruptive rehydration tests only
 make test-rehydration-cli  # Run rehydration CLI tests only
 make test-e2e-full         # Full lifecycle: deploy → test → teardown
 make download-cli          # Download latest DCM CLI from GitHub releases
+make deploy-osac-backend   # Deploy OSAC fulfillment-service backend on OCP (one-time setup)
+make teardown-osac-backend # Remove the OSAC backend from OCP
 ```
 
 The test harness (`tests/run-e2e.sh`) supports `--skip-deploy`, `--skip-teardown`, `--skip-cli`, `--dcm-cli-path`, `--label-filter`, `--gateway-url`, `--junit-report`, and service provider flags (`--k8s-container-service-provider`, `--all-service-providers`, `--kubeconfig`, `--cluster-api`, `--cluster-password`, etc.).
@@ -215,6 +218,82 @@ All test targets support JUnit XML output: `make test-e2e JUNIT_REPORT=results.x
 | **Smoke tests** | Health checks + CLI version (quick validation) | `smoke` |
 | **Rehydration tests** | Rehydration lifecycle, failover, policy, integrity | `rehydration` |
 | **Rehydration subtypes** | happy-path, failover, policy, negative, integrity, contract | see file headers |
+| **OSAC SP tests** | OSAC SP cluster/VM API + NATS status events | `sp`, `osac` |
+
+### OSAC SP Backend (fulfillment-service on OCP)
+
+OSAC SP tests that go beyond input validation (CRUD lifecycle, NATS events) require
+a real `fulfillment-service` backend. No external OSAC/MOC credentials are needed —
+the backend is a self-contained stack deployed on the edge94 OCP cluster using
+test-only credentials vendored from `dcm-project/osac-service-provider`'s own Tier B
+e2e infrastructure (`tests/osac-backend/`).
+
+**Fully turn-key (requires `oc`, `helm`, `yq` — `deploy-dcm.sh` deploys the backend for you):**
+
+```bash
+oc_login_auto                       # log in to edge94
+./scripts/deploy-dcm.sh --deploy-osac-backend --environment-agent --osac-service-provider
+```
+
+`--deploy-osac-backend` runs `scripts/deploy-osac-backend.sh` before compose bring-up
+(idempotent — skips already-present cert-manager/namespace/etc. on reruns), then
+`deploy-dcm.sh` auto-detects the resulting `deploy/osac-backend.env` and wires in
+credentials plus the TLS CA overlay (`tests/compose-osac-sp-tls.yaml`) automatically —
+no manual `source` or `--compose-file` needed.
+
+**Or as two steps (useful when reusing one backend across many stack up/down cycles):**
+
+```bash
+oc_login_auto                       # log in to edge94
+make deploy-osac-backend            # one-time: deploys Postgres + Keycloak + fulfillment-service
+                                    # writes deploy/osac-backend.env + deploy/osac-ca.pem
+./scripts/deploy-dcm.sh --environment-agent --osac-service-provider
+```
+
+**Running OSAC SP E2E tests:**
+
+```bash
+# Validation-only (no real backend needed — always runs):
+make test-osac-sp
+
+# Full CRUD + NATS (requires backend + template IDs):
+OSAC_E2E_CLUSTER_TEMPLATE_ID=<id> \
+OSAC_E2E_VM_TEMPLATE_ID=<id> \
+make test-osac-sp
+```
+
+The backend namespace is `osac-test-backend` by default. Teardown — `deploy-dcm.sh --tear-down`
+does **not** remove the backend on its own (it only tears down the compose stack); either
+couple it explicitly or use the standalone target:
+
+```bash
+./scripts/deploy-dcm.sh --deploy-osac-backend --tear-down   # tears down compose stack + OSAC backend
+# or, if the backend was deployed separately:
+make teardown-osac-backend
+```
+
+Credentials are static test-only values committed to git (`tests/osac-backend/realm.json`).
+The `osac-admin` client secret is `tierb-osac-admin-secret`. Never use these for real deployments.
+
+**Mac/Darwin — OCP backend requires port-forwarding:**
+
+The OCP cluster's internal service network (`192.168.30.x`) is not directly routable from a Mac.
+`make port-forward-osac` tunnels the required services via `oc port-forward`, registered as
+persistent macOS launchd agents (`com.osac.pf.keycloak`, `com.osac.pf.grpc`):
+
+```bash
+oc_login_auto
+make port-forward-osac    # tunnels 8443 (Keycloak) and 19443 (gRPC) via launchd auto-restart
+./scripts/deploy-dcm.sh --environment-agent --osac-service-provider
+# deploy-dcm.sh auto-detects the port-forwards (lsof) and injects
+# tests/compose-osac-sp-darwin-pf.yaml with the correct in-cluster hostnames
+make test-osac-sp
+make stop-port-forward-osac    # when done
+```
+
+Key design: Keycloak is accessed via its in-cluster hostname (`ffs-keycloak.osac-test-backend.svc.cluster.local:8443`) — this makes Keycloak issue tokens with the issuer URL that matches fulfillment-service's configured `auth.issuerUrl`. Port 8443 does not need sudo on macOS (> 1024).
+
+Full runbook and troubleshooting: `.cursor/prompts/deploy-osac-backend.md` (`@deploy-osac-backend` in Cursor).
 
 ### CLI Binary Resolution
 

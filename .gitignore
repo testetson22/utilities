@@ -2,6 +2,9 @@
 dcm-versions.json
 dcm-cli-version.json
 
+# OSAC backend artifacts (scripts/deploy-osac-backend.sh) — env vars + CA cert
+/deploy/
+
 # Local/hypervisor-only kubevirt E2E leftover cleaner (not part of the suite)
 scripts/cleanup-kubevirt-e2e.sh
 

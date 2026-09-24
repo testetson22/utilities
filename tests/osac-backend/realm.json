@@ -1,0 +1,159 @@
+{
+  "realm": "osac",
+  "enabled": true,
+  "organizationsEnabled": true,
+  "sslRequired": "none",
+
+  "clientScopes": [
+    {
+      "name": "osac-api",
+      "description": "OSAC API",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "osac-api-aud",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "id.token.claim": "false",
+            "lightweight.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "included.custom.audience": "osac-api"
+          }
+        }
+      ]
+    },
+    {
+      "name": "username",
+      "description": "Username claim",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "aggregate.attrs": "false",
+            "introspection.token.claim": "true",
+            "multivalued": "false",
+            "userinfo.token.claim": "true",
+            "user.attribute": "username",
+            "id.token.claim": "true",
+            "lightweight.claim": "false",
+            "access.token.claim": "true",
+            "claim.name": "username",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "groups",
+      "description": "Group membership",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "introspection.token.claim": "true",
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "lightweight.claim": "false",
+            "access.token.claim": "true",
+            "claim.name": "groups"
+          }
+        }
+      ]
+    }
+  ],
+
+  "defaultDefaultClientScopes": ["basic", "username", "groups"],
+
+  "clients": [
+    {
+      "clientId": "osac-cli",
+      "name": "OSAC CLI",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "protocol": "openid-connect",
+      "attributes": {
+        "oauth2.device.authorization.grant.enabled": "true"
+      },
+      "defaultClientScopes": ["basic", "username", "groups", "osac-api"],
+      "redirectUris": ["http://localhost"]
+    },
+    {
+      "clientId": "osac-admin",
+      "name": "OSAC administrator",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "tierb-osac-admin-secret",
+      "serviceAccountsEnabled": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "protocol": "openid-connect",
+      "fullScopeAllowed": true,
+      "defaultClientScopes": ["basic", "username", "groups", "osac-api"]
+    },
+    {
+      "clientId": "osac-controller",
+      "name": "OSAC controller",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "tierb-osac-controller-secret",
+      "serviceAccountsEnabled": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "protocol": "openid-connect",
+      "fullScopeAllowed": true,
+      "defaultClientScopes": ["basic", "username", "groups", "osac-api"]
+    }
+  ],
+
+  "users": [
+    {
+      "username": "service-account-osac-admin",
+      "enabled": true,
+      "serviceAccountClientId": "osac-admin"
+    },
+    {
+      "username": "service-account-osac-controller",
+      "enabled": true,
+      "serviceAccountClientId": "osac-controller",
+      "clientRoles": {
+        "realm-management": [
+          "manage-realm",
+          "manage-users",
+          "view-realm",
+          "view-users"
+        ]
+      }
+    }
+  ]
+}

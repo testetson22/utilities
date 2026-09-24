@@ -1,0 +1,86 @@
+# ffs-postgres — vendored from dcm-project/osac-service-provider test/e2e/manifests-tierb/postgres.yaml
+# Single Postgres 18+ instance (required by fulfillment-service) backing both
+# Keycloak's DB and fulfillment-service's own DB.
+#
+# Applied by deploy-osac-backend.sh into the osac-test-backend namespace.
+# No namespace metadata here — the script applies with -n $OSAC_BACKEND_NAMESPACE.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ffs-postgres-init
+  labels:
+    app.kubernetes.io/name: ffs-postgres
+    app.kubernetes.io/part-of: osac-test-backend
+data:
+  init-service-db.sh: |
+    #!/bin/sh
+    set -eu
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+      CREATE DATABASE service;
+    EOSQL
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ffs-postgres
+  labels:
+    app.kubernetes.io/name: ffs-postgres
+    app.kubernetes.io/part-of: osac-test-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ffs-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ffs-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: docker.io/library/postgres:18-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              value: "tierb-postgres-password"
+            - name: POSTGRES_DB
+              value: "keycloak"
+          volumeMounts:
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 3
+            periodSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: init
+          configMap:
+            name: ffs-postgres-init
+            defaultMode: 0o755
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ffs-postgres
+  labels:
+    app.kubernetes.io/name: ffs-postgres
+    app.kubernetes.io/part-of: osac-test-backend
+spec:
+  selector:
+    app.kubernetes.io/name: ffs-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP

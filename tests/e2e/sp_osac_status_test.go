@@ -78,10 +78,11 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 			for time.Now().Before(deadline) {
 				msg, err := sub.NextMsg(5 * time.Second)
 				if err != nil {
-					continue
+					continue // timeout or closed — keep polling
 				}
 				var event osacCloudEvent
 				if err := json.Unmarshal(msg.Data, &event); err != nil {
+					GinkgoWriter.Printf("dcm.cluster: ignoring non-JSON message (%d bytes): %v\n", len(msg.Data), err)
 					continue
 				}
 				if event.Data.ID == clusterID {
@@ -93,10 +94,16 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 				"no dcm.cluster CloudEvent received for cluster %s within 120s", clusterID)
 
 			// CloudEvent envelope assertions (REQ-PUBLISH-030)
+			Expect(matched.SpecVersion).To(Equal("1.0"),
+				"CloudEvent specversion must be '1.0'")
 			Expect(matched.Type).To(Equal("dcm.status.cluster"),
 				"CloudEvent type should be dcm.status.cluster")
-			Expect(matched.Source).To(ContainSubstring("osac-sp"),
-				"CloudEvent source should identify the OSAC SP")
+			Expect(matched.Source).To(HavePrefix("osac-sp"),
+				"CloudEvent source should start with 'osac-sp' to identify the OSAC SP")
+			Expect(matched.ID).NotTo(BeEmpty(),
+				"CloudEvent id must be set (unique per event)")
+			Expect(matched.DataContentType).To(Equal("application/json"),
+				"CloudEvent datacontenttype must be application/json")
 
 			// Data payload assertions — typed fields, no map casting
 			Expect(matched.Data.ID).To(Equal(clusterID))
@@ -148,10 +155,11 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 			for time.Now().Before(deadline) {
 				msg, err := sub.NextMsg(5 * time.Second)
 				if err != nil {
-					continue
+					continue // timeout or closed — keep polling
 				}
 				var event osacCloudEvent
 				if err := json.Unmarshal(msg.Data, &event); err != nil {
+					GinkgoWriter.Printf("dcm.vm: ignoring non-JSON message (%d bytes): %v\n", len(msg.Data), err)
 					continue
 				}
 				if event.Data.ID == vmID {
@@ -163,10 +171,16 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 				"no dcm.vm CloudEvent received for VM %s within 120s", vmID)
 
 			// CloudEvent envelope assertions (REQ-PUBLISH-030)
+			Expect(matched.SpecVersion).To(Equal("1.0"),
+				"CloudEvent specversion must be '1.0'")
 			Expect(matched.Type).To(Equal("dcm.status.vm"),
 				"CloudEvent type should be dcm.status.vm")
-			Expect(matched.Source).To(ContainSubstring("osac-sp"),
-				"CloudEvent source should identify the OSAC SP")
+			Expect(matched.Source).To(HavePrefix("osac-sp"),
+				"CloudEvent source should start with 'osac-sp' to identify the OSAC SP")
+			Expect(matched.ID).NotTo(BeEmpty(),
+				"CloudEvent id must be set (unique per event)")
+			Expect(matched.DataContentType).To(Equal("application/json"),
+				"CloudEvent datacontenttype must be application/json")
 
 			// Data payload assertions — VM uses 8-value status vocabulary (DD-121)
 			Expect(matched.Data.ID).To(Equal(vmID))

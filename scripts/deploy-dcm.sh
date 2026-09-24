@@ -136,6 +136,9 @@ EOF
   --deploy-acm                   Deploy ACM on the cluster before starting the stack (opt-in, heavy)
   --deploy-mce                   Deploy MCE on the cluster before starting the stack (opt-in, heavy)
   --deploy-cnv                   Deploy OpenShift Virtualization (CNV) on the cluster before starting the stack (opt-in, heavy)
+  --deploy-osac-backend          Deploy the self-contained OSAC fulfillment-service backend before
+                                  starting the stack (opt-in, heavy; see scripts/deploy-osac-backend.sh).
+                                  With --tear-down, also removes the OSAC backend namespace.
   --acm-cluster-sp-repo URL      Git repo for acm-cluster-service-provider (default: ${DEFAULT_ACM_CLUSTER_SP_REPO})
   --acm-cluster-sp-branch REF    Branch to clone (default: ${DEFAULT_ACM_CLUSTER_SP_BRANCH})
   --kubeconfig PATH              Path to kubeconfig file (auto-detected if omitted)
@@ -201,8 +204,10 @@ Examples:
   $(basename "$0") --k8s-storage-service-provider --kubeconfig ~/.kube/config
   $(basename "$0") --all-service-providers --cluster-api https://api.cluster.example.com --cluster-password secret
   $(basename "$0") --acm-cluster-service-provider --deploy-acm --kubeconfig ~/.kube/config
+  $(basename "$0") --deploy-osac-backend --environment-agent --osac-service-provider
   $(basename "$0") --auth-enabled
   $(basename "$0") --tear-down
+  $(basename "$0") --deploy-osac-backend --tear-down
   $(basename "$0") --running-versions
 EOF
 }
@@ -386,6 +391,53 @@ validate_osac_provider() {
     # OSAC SP needs no cluster access — validate credentials and env-agent dependency only.
     log "Validating OSAC service provider prerequisites"
 
+    # Auto-detect and wire in a backend deployed via scripts/deploy-osac-backend.sh.
+    # This makes --osac-service-provider turn-key: no manual `source` of the backend
+    # env file and no manual --compose-file for the TLS CA overlay.
+    local osac_backend_env="${REPO_ROOT}/deploy/osac-backend.env"
+    if [[ -f "${osac_backend_env}" ]]; then
+        info "Found OSAC backend env file: ${osac_backend_env} (sourcing)"
+        # shellcheck source=/dev/null
+        source "${osac_backend_env}"
+
+        local osac_tls_overlay="${REPO_ROOT}/tests/compose-osac-sp-tls.yaml"
+        if [[ -n "${OSAC_CA_CERT_FILE:-}" ]] && [[ -f "${osac_tls_overlay}" ]]; then
+            COMPOSE_EXTRA_FILE_ARGS+=("-f" "${osac_tls_overlay}")
+            info "Auto-injecting TLS overlay for OSAC backend CA cert: ${osac_tls_overlay}"
+        fi
+
+        # On macOS the OCP worker nodes (192.168.30.x) are not routable via VPN and
+        # the *.apps OCP wildcard DNS isn't served by the VPN's split-horizon resolvers.
+        # Auto-inject the Darwin port-forward overlay when both conditions are met:
+        #   1. Running on Darwin
+        #   2. The port-forwards are already listening on 18443/19443 (start them via
+        #      `make port-forward-osac` or manually before deploying)
+        local darwin_pf_overlay="${REPO_ROOT}/tests/compose-osac-sp-darwin-pf.yaml"
+        if [[ "$(uname -s)" == "Darwin" ]] && [[ -f "${darwin_pf_overlay}" ]]; then
+            # Use lsof to check port listeners — avoids nc -z which can kill oc port-forward
+            # by triggering WebSocket teardown on zero-IO probe. lsof just reads the kernel
+            # socket table without establishing a connection.
+            local pf_up=false
+            local pf_retries=5
+            while (( pf_retries-- > 0 )); do
+                if lsof -i :8443 -sTCP:LISTEN 2>/dev/null | grep -q . && \
+                   lsof -i :19443 -sTCP:LISTEN 2>/dev/null | grep -q .; then
+                    pf_up=true
+                    break
+                fi
+                sleep 2
+            done
+            if [[ "${pf_up}" == true ]]; then
+                COMPOSE_EXTRA_FILE_ARGS+=("-f" "${darwin_pf_overlay}")
+                info "Auto-injecting Darwin port-forward overlay (port-forwards detected on 8443/19443)"
+            else
+                info "Darwin detected — OSAC backend routes unreachable via VPN."
+                info "  Run 'make port-forward-osac' to tunnel via oc port-forward, then re-deploy."
+                info "  (Skipping darwin-pf overlay — port-forwards not running on 8443/19443)"
+            fi
+        fi
+    fi
+
     local missing=()
     for var in SP_OSAC_FULFILLMENT_ADDRESS SP_OSAC_OIDC_ISSUER_URL \
                 SP_OSAC_OIDC_CLIENT_ID SP_OSAC_OIDC_CLIENT_SECRET; do
@@ -397,7 +449,8 @@ validate_osac_provider() {
         for var in "${missing[@]}"; do
             err "  ${var}"
         done
-        err "Add them to deploy/.env or export them in the shell before deploying."
+        err "Deploy the self-contained OSAC backend first: ./scripts/deploy-osac-backend.sh"
+        err "(or export the SP_OSAC_* vars yourself before deploying)"
         return 1
     fi
     info "OSAC credentials present"
@@ -798,6 +851,7 @@ RUNNING_VERSIONS=false
 CLEANUP_ON_FAILURE=false
 DEPLOY_ACM_MCE=""
 DEPLOY_CNV=false
+DEPLOY_OSAC_BACKEND=false
 GITOPS_ENABLED=false
 ACM_CLUSTER_SP_REPO="${DEFAULT_ACM_CLUSTER_SP_REPO}"
 ACM_CLUSTER_SP_BRANCH="${DEFAULT_ACM_CLUSTER_SP_BRANCH}"
@@ -862,6 +916,8 @@ while [[ $# -gt 0 ]]; do
             GITOPS_ENABLED=true; shift ;;
         --deploy-cnv)
             DEPLOY_CNV=true; shift ;;
+        --deploy-osac-backend)
+            DEPLOY_OSAC_BACKEND=true; shift ;;
         --deploy-acm)
             [[ -n "${DEPLOY_ACM_MCE}" ]] && { err "--deploy-acm and --deploy-mce are mutually exclusive"; exit 1; }
             DEPLOY_ACM_MCE="acm"; shift ;;
@@ -976,6 +1032,13 @@ fi
 if [[ "${TEAR_DOWN}" == true ]]; then
     ensure_podman_running || exit 1
     tear_down "${CONTROL_PLANE_TMP_DIR}" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}
+
+    if [[ "${DEPLOY_OSAC_BACKEND}" == true ]]; then
+        log "Tearing down OSAC backend (--deploy-osac-backend + --tear-down)"
+        resolve_kubeconfig || exit 1
+        KUBECONFIG="${DCM_KUBECONFIG}" bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh" --tear-down
+    fi
+
     exit 0
 fi
 
@@ -1004,8 +1067,18 @@ any_provider_needs_cluster() {
     done
     return 1
 }
-if any_provider_needs_cluster || [[ -n "${DEPLOY_ACM_MCE}" ]]; then
+if any_provider_needs_cluster || [[ -n "${DEPLOY_ACM_MCE}" ]] || [[ "${DEPLOY_OSAC_BACKEND}" == true ]]; then
     resolve_kubeconfig || exit 1
+fi
+
+# --- OSAC backend deployment ------------------------------------------------ #
+# Runs before provider validation (unlike ACM/MCE below) because
+# validate_osac_provider() hard-requires the backend's credentials to already
+# be resolvable from deploy/osac-backend.env — the OSAC SP container reads
+# them at compose bring-up, not at runtime like the ACM cluster SP does.
+if [[ "${DEPLOY_OSAC_BACKEND}" == true ]]; then
+    log "Deploying OSAC backend on the cluster (idempotent — skips already-present resources)"
+    KUBECONFIG="${DCM_KUBECONFIG}" bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh"
 fi
 
 # Validate and export env vars for each enabled provider
@@ -1268,6 +1341,34 @@ log "Cloning control-plane (repo=${CONTROL_PLANE_REPO}, branch=${CONTROL_PLANE_B
 git clone --branch "${CONTROL_PLANE_BRANCH}" --single-branch --depth 1 "${CONTROL_PLANE_REPO}" "${CONTROL_PLANE_TMP_DIR}"
 
 ensure_deploy_env "${CONTROL_PLANE_TMP_DIR}" || exit 1
+
+# Patch the cloned compose.yaml to remove profile-gated depends_on entries
+# that cause podman-compose ≤1.5.0 to crash in multi-file mode with:
+#   KeyError: '<service>'   (check_dep_conditions can't find profile-gated services)
+# The `required: false` Compose spec field is NOT supported by podman-compose 1.5.0,
+# so we remove the keycloak dependency from control-plane directly in the cloned file.
+#
+# Scope: only when BOTH conditions hold:
+#   1. Overlay files are present (multi-file mode — single-file mode is unaffected)
+#   2. Auth is NOT enabled — when auth IS enabled the keycloak service is active
+#      (via the 'auth' Compose profile) and the depends_on entry is correct and required.
+#      Removing it when keycloak is running would break health-check ordering.
+if [[ ${#COMPOSE_EXTRA_FILE_ARGS[@]} -gt 0 ]] && [[ "${AUTH_ENABLED}" != true ]]; then
+    local_compose="${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml"
+    if python3 - "${local_compose}" <<'PYEOF'
+import re, sys
+f = sys.argv[1]
+txt = open(f).read()
+# Remove the keycloak block from depends_on (handles any indentation level)
+patched = re.sub(r'\n( +)keycloak:\n\1 +condition: service_healthy', '', txt)
+if patched != txt:
+    open(f, 'w').write(patched)
+    print("    Patched compose.yaml: removed profile-gated keycloak from depends_on (podman-compose ≤1.5.0 compat, auth disabled)")
+PYEOF
+    then
+        :  # patch ran (output already printed by python)
+    fi
+fi
 
 # --- Deploy ---------------------------------------------------------------- #
 

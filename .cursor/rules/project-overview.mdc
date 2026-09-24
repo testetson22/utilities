@@ -24,6 +24,7 @@ Houses the E2E deploy script, Ginkgo/Gomega E2E test suite, and test plans.
 ## Available Prompts
 Use `@<prompt-name>` in Cursor to include task-specific context:
 - `@deploy-dcm` - Deploy the full DCM stack
+- `@deploy-osac-backend` - Deploy a self-contained OSAC fulfillment-service backend on OCP
 - `@tear-down` - Tear down a running DCM deployment
 - `@check-versions` - Get running container versions
 - `@troubleshoot-deploy` - Diagnose deployment issues

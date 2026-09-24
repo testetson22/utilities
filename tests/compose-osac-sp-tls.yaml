@@ -1,0 +1,23 @@
+# compose-osac-sp-tls.yaml — Compose overlay that mounts the OSAC backend CA
+# certificate into the osac-service-provider container.
+#
+# Used when the OSAC backend is deployed on OCP (via scripts/deploy-osac-backend.sh),
+# which issues its own self-signed CA. The OSAC SP must trust this CA for both
+# the Keycloak OIDC endpoint and the fulfillment-service gRPC endpoint.
+#
+# Usage (after running deploy-osac-backend.sh and sourcing its env output):
+#   source deploy/osac-backend.env
+#   ./scripts/deploy-dcm.sh \
+#     --environment-agent \
+#     --osac-service-provider \
+#     --compose-file tests/compose-osac-sp-tls.yaml
+#
+# Requires: OSAC_CA_CERT_FILE env var pointing at the CA cert file written by
+# deploy-osac-backend.sh (default: deploy/osac-ca.pem).
+
+services:
+  osac-service-provider:
+    volumes:
+      - "${OSAC_CA_CERT_FILE:-./deploy/osac-ca.pem}:/etc/osac/ca.pem:ro"
+    environment:
+      SP_OSAC_TLS_CERT_FILE: /etc/osac/ca.pem

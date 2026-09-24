@@ -19,7 +19,9 @@ services:
       SP_PROVIDER_CLUSTER_NAME: ${OSAC_SP_CLUSTER_NAME:-osac-sp-cluster}
       SP_PROVIDER_VM_NAME: ${OSAC_SP_VM_NAME:-osac-sp-vm}
       # Registers with environment-agent (DD-203), not control-plane directly.
-      DCM_REGISTRATION_URL: "http://environment-agent:8080"
+      # Base URL only — OSAC SP appends /providers for registration.
+      # Must include the /api/v1alpha1 prefix so the full path resolves correctly.
+      DCM_REGISTRATION_URL: "http://environment-agent:8080/api/v1alpha1"
       DCM_NATS_URL: "nats://nats:4222"
       SP_OSAC_FULFILLMENT_ADDRESS: ${SP_OSAC_FULFILLMENT_ADDRESS}
       SP_OSAC_OIDC_ISSUER_URL: ${SP_OSAC_OIDC_ISSUER_URL}
@@ -29,7 +31,9 @@ services:
     ports:
       - "8091:8080"
     depends_on:
-      environment-agent:
-        condition: service_started
       nats:
         condition: service_started
+    # Note: environment-agent is intentionally not listed here because it is
+    # defined in a separate overlay file (compose-environment-agent-test.yaml)
+    # and podman-compose cannot resolve cross-file depends_on references.
+    # The OSAC SP retries registration on startup so ordering is not critical.

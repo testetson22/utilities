@@ -1,0 +1,22 @@
+# compose-podman-compat.yaml — workaround for podman-compose ≤ 1.5.0 bug.
+#
+# podman-compose in multi-file (-f overlay) mode fails to skip `depends_on`
+# entries whose target service is gated to an inactive profile, producing:
+#   KeyError: '<service-name>'
+#
+# The Compose spec `required: false` field marks a dependency as optional
+# so the dependency check is skipped when the service is not active.
+# This file patches the known offender in control-plane's base compose:
+#   control-plane → depends_on: keycloak (profile: auth, not active by default)
+#
+# Auto-injected by deploy-dcm.sh when any provider compose overlay is active.
+# Safe when --auth-enabled is also used: required: false just means "start
+# control-plane even if keycloak is not yet healthy", which is fine since
+# control-plane retries its own auth connection internally.
+
+services:
+  control-plane:
+    depends_on:
+      keycloak:
+        condition: service_healthy
+        required: false

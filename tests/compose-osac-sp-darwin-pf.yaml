@@ -1,0 +1,58 @@
+# compose-osac-sp-darwin-pf.yaml — Mac/Darwin port-forward overlay for OSAC SP backend.
+#
+# On macOS the OCP worker nodes (192.168.30.x) are not routable via VPN and
+# the *.apps.ocp-edge94.qe.lab.redhat.com wildcard DNS isn't served by the
+# VPN split-horizon resolvers. This overlay works around both problems for
+# local development:
+#
+#   extra_hosts: maps the two OCP route hostnames to 192.168.127.254
+#                (host.containers.internal — the Mac host as seen from podman).
+#   environment: overrides the OSAC SP endpoint/issuer URLs to use the port-
+#                forwarded local ports instead of the OCP route port 443.
+#
+# Prerequisites (run ONCE before deploying the DCM stack):
+#   make port-forward-osac   # starts both via launchd and waits for readiness
+#
+# How it works:
+#   - The OSAC SP resolves ffs-keycloak.osac-test-backend.svc.cluster.local:8443
+#     → 192.168.127.254:8443 (via extra_hosts; host.containers.internal on macOS)
+#     → gvproxy forwards 192.168.127.254:PORT → 127.0.0.1:PORT on the Mac host
+#     → oc port-forward (bound to 127.0.0.1:8443) → OCP ffs-keycloak:8443
+#     TLS cert SAN covers ffs-keycloak.osac-test-backend.svc.cluster.local.
+#   - Keycloak derives its token issuer from the request Host header, producing
+#     iss=https://ffs-keycloak.osac-test-backend.svc.cluster.local:8443/realms/osac —
+#     which exactly matches fulfillment-service's configured auth.issuerUrl (no mismatch).
+#   - The OSAC SP resolves fulfillment-grpc-server.osac-test-backend:19443
+#     → 192.168.127.254:19443 → gvproxy → 127.0.0.1:19443 → oc port-forward
+#     → fulfillment-grpc-server:8000 (TLS, cert SAN covers internal service name)
+#
+# Injected automatically by validate_osac_provider() in deploy-dcm.sh when
+# running on Darwin without a direct route to 192.168.30.0/24.
+
+services:
+  osac-service-provider:
+    extra_hosts:
+      # Keycloak: use the in-cluster svc.cluster.local hostname — its cert SANs include this
+      # name, AND the fulfillment-service's trusted OIDC issuer uses this hostname. Keycloak
+      # derives the token issuer from the Host header, so tokens get the svc.cluster.local
+      # issuer URL which the fulfillment-service trusts. Port-forwarded to OCP ffs-keycloak:8443
+      # (port 8443 > 1024 — no sudo needed).
+      - "ffs-keycloak.osac-test-backend.svc.cluster.local:192.168.127.254"
+      # gRPC: internal service hostname (cert SANs include this; OCP route cert does not).
+      # Port-forwarded to OCP fulfillment-grpc-server:8000.
+      - "fulfillment-grpc-server.osac-test-backend:192.168.127.254"
+    environment:
+      # Keycloak in-cluster URL — matches the fulfillment-service's configured trusted issuer:
+      #   auth.issuerUrl: https://ffs-keycloak.<ns>.svc.cluster.local:8443/realms/osac
+      # Keycloak's cert is valid for ffs-keycloak.osac-test-backend.svc.cluster.local (SAN).
+      SP_OSAC_OIDC_ISSUER_URL: "https://ffs-keycloak.osac-test-backend.svc.cluster.local:8443/realms/osac"
+      # gRPC: internal service hostname, cert valid, port-forwarded at 19443
+      SP_OSAC_FULFILLMENT_ADDRESS: "fulfillment-grpc-server.osac-test-backend:19443"
+      # SP_OSAC_TLS_CERT_FILE covers gRPC TLS only. Go's TLS stack also reads SSL_CERT_FILE
+      # for all other HTTPS connections (e.g. OIDC discovery). The cert is already mounted at
+      # /etc/osac/ca.pem by the TLS overlay (compose-osac-sp-tls.yaml).
+      SSL_CERT_FILE: "/etc/osac/ca.pem"
+      # oc port-forward tunnels raw TCP through Kubernetes API server WebSocket. The gRPC
+      # server may not advertise h2 ALPN through this tunnel path. grpc-go 1.67+ enforces
+      # ALPN strictly; disable enforcement for local dev port-forward scenarios.
+      GRPC_ENFORCE_ALPN_ENABLED: "false"
