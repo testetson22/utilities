@@ -12,75 +12,80 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// Skipped: the DCM CLI has not been updated for the /providers → /agents migration.
-// Re-enable once the CLI supports `dcm agent` commands (see FLPATH-XXXX).
-var _ = PDescribe("CLI: sp provider commands", Label("cli"), func() {
+// PDescribe: the DCM CLI has not been updated since control-plane#51 removed the
+// /providers API and replaced it with /agents.  Two blockers must be resolved:
+//
+//  1. CLI work (FLPATH-4895 — assigned, status: New):
+//     `dcm sp provider list/get` hits GET /providers → 404.
+//     CLI needs `dcm agent list/get` commands (or update `sp provider` to target /agents).
+//
+//  2. Test assertions (update below when CLI ships):
+//     Change runDCM("sp", "provider", ...) → runDCM("agent", ...) (or equivalent),
+//     and update the JSON key check to match whatever the CLI wraps agents under.
+//
+// The BeforeAll/AfterAll below have already been updated to use the /agents API.
+// Re-enable by changing PDescribe → Describe once the CLI work is complete.
+var _ = PDescribe("CLI: agent commands", Label("cli"), func() {
 	Context("read operations", Ordered, func() {
-		var providerID string
-		providerName := fmt.Sprintf("e2e-cli-provider-%d", time.Now().UnixNano())
+		var agentID string
+		agentName := fmt.Sprintf("e2e-cli-agent-%d", time.Now().UnixNano())
 
-		// Create a provider via API so the CLI has something to read.
+		// Register an agent via API so the CLI has something to read.
+		// /agents has no DELETE endpoint — agents deregister via heartbeat timeout.
 		BeforeAll(func() {
 			payload := fmt.Sprintf(`{
 				"name": %q,
-				"endpoint": "https://example.com/api",
-				"service_type": "vm",
-				"schema_version": "v1alpha1"
-			}`, providerName)
+				"environment": "e2e-test",
+				"topic_name": "dcm.agent.%s",
+				"service_types": ["vm"],
+				"cost": "low"
+			}`, agentName, agentName)
 
-			resp, err := doRequest(http.MethodPost, "/providers", payload)
+			resp, err := doRequest(http.MethodPost, "/agents", payload)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp.StatusCode).To(Equal(http.StatusCreated))
 
 			var body map[string]interface{}
 			decodeJSON(resp, &body)
 
-			id, ok := body["id"].(string)
-			Expect(ok).To(BeTrue(), "id should be a string")
-			providerID = id
+			id, ok := body["agent_id"].(string)
+			Expect(ok).To(BeTrue(), "agent_id should be a string")
+			agentID = id
 		})
 
-		AfterAll(func() {
-			if providerID != "" {
-				resp, err := doRequest(http.MethodDelete, "/providers/"+providerID, "")
-				if err != nil {
-					GinkgoWriter.Printf("Warning: cleanup failed for provider %s: %v\n", providerID, err)
-				}
-				if resp != nil {
-					resp.Body.Close()
-				}
-			}
-		})
-
-		It("lists providers", func() {
+		// TODO: update command name once CLI ships `dcm agent` subcommands.
+		It("lists agents", func() {
 			stdout, stderr, exitCode := runDCM("sp", "provider", "list")
 
 			Expect(exitCode).To(Equal(0), "stderr: %s", stderr)
-			Expect(stdout).To(ContainSubstring(providerID))
+			Expect(stdout).To(ContainSubstring(agentID))
 		})
 
-		It("lists providers in JSON format", func() {
+		It("lists agents in JSON format", func() {
 			stdout, stderr, exitCode := runDCM("sp", "provider", "list", "--output", "json")
 
 			Expect(exitCode).To(Equal(0), "stderr: %s", stderr)
 
 			var result map[string]interface{}
 			Expect(json.Unmarshal([]byte(stdout), &result)).To(Succeed())
-			Expect(result).To(HaveKey("results"))
+			// TODO: update key ("agents" or "results") to match CLI output once it ships.
+			Expect(result).To(SatisfyAny(HaveKey("agents"), HaveKey("results")))
 		})
 
-		It("gets a provider by ID", func() {
-			Expect(providerID).NotTo(BeEmpty(), "provider must be created first")
+		It("gets an agent by ID", func() {
+			Expect(agentID).NotTo(BeEmpty(), "agent must be registered first")
 
-			stdout, stderr, exitCode := runDCM("sp", "provider", "get", providerID)
+			// TODO: update command name once CLI ships `dcm agent get`.
+			stdout, stderr, exitCode := runDCM("sp", "provider", "get", agentID)
 
 			Expect(exitCode).To(Equal(0), "stderr: %s", stderr)
-			Expect(stdout).To(ContainSubstring(providerName))
+			Expect(stdout).To(ContainSubstring(agentName))
 		})
 	})
 
 	Context("error handling", func() {
-		It("returns exit code 1 for non-existent provider", func() {
+		// TODO: update command name once CLI ships `dcm agent get`.
+		It("returns exit code 1 for non-existent agent", func() {
 			_, stderr, exitCode := runDCM("sp", "provider", "get", "does-not-exist")
 
 			Expect(exitCode).To(Equal(1))

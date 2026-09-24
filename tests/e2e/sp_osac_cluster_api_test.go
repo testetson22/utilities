@@ -269,6 +269,10 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 		// Marked PIt (pending) so the gap appears in test output without failing CI;
 		// re-enable by changing PIt → It once the backend enforces the limit.
 		PIt("rejects max_page_size > 100 with 400 (AEP-132)", func() {
+			// KNOWN BACKEND GAP: fulfillment-service does not enforce the AEP-132 upper
+			// limit (max_page_size > 100 should return 400, currently returns 200).
+			// Tracked under FLPATH-4459 (epic) / FLPATH-4463 (story).
+			// Re-enable (change PIt → It) once fulfillment-service enforces the limit.
 			resp, err := doOsacClusterRequest(http.MethodGet, "/clusters?max_page_size=101", "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()

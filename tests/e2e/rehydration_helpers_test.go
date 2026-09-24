@@ -537,11 +537,14 @@ func startProvider(provider ThreeTierProvider) {
 }
 
 func restartSPRM() {
-	container := findComposeContainer("service-provider-resource-manager")
+	// The SPRM was a standalone service ("service-provider-resource-manager", later
+	// "service-provider-manager") that has since been merged into environment-agent.
+	// The CI pipeline had a matching sed patch (stale); this is the canonical fix.
+	container := findComposeContainer("environment-agent")
 	out, err := exec.Command(podmanBin, "restart", container).CombinedOutput()
 	Expect(err).NotTo(HaveOccurred(),
-		"podman restart SPRM failed: %s", string(out))
-	GinkgoWriter.Println("Restarted service-provider-resource-manager")
+		"podman restart environment-agent (SPRM) failed: %s", string(out))
+	GinkgoWriter.Println("Restarted environment-agent (contains embedded SPRM)")
 }
 
 func waitForProviderHealth(providerName, expectedStatus string, timeout time.Duration) {

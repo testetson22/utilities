@@ -17,10 +17,11 @@ var _ = Describe("Rehydration Failover", Label("rehydration", "failover", "disru
 
 	Context("provider failover", Ordered, func() {
 		var (
-			instanceUID string
-			policyID    string
-			providerA   ThreeTierProvider
-			providerB   ThreeTierProvider
+			instanceUID         string
+			policyID            string
+			providerA           ThreeTierProvider
+			providerB           ThreeTierProvider
+			supersededResourceIDs []string // tracks IDs replaced by rehydration, used by orphan check
 		)
 
 		BeforeAll(func() {
@@ -34,6 +35,7 @@ var _ = Describe("Rehydration Failover", Label("rehydration", "failover", "disru
 			instanceUID = inst.UID
 
 			waitForInstanceRunning(inst.ResourceID, provisionTimeout)
+			supersededResourceIDs = append(supersededResourceIDs, inst.ResourceID)
 		})
 
 		AfterAll(func() {
@@ -74,6 +76,9 @@ var _ = Describe("Rehydration Failover", Label("rehydration", "failover", "disru
 				Expect(ns).To(Equal(providerB.Namespace),
 					"new resource should be in provider B's namespace %s", providerB.Namespace)
 			}
+
+			// Track origResourceID: it is now superseded and should eventually have 0 deployments.
+			supersededResourceIDs = append(supersededResourceIDs, origResourceID)
 		})
 
 		It("rehydrate back after provider restore (bidirectional failover)", Label("cluster"), func() {
@@ -99,11 +104,24 @@ var _ = Describe("Rehydration Failover", Label("rehydration", "failover", "disru
 				Expect(ns).To(Equal(providerA.Namespace),
 					"resource should return to provider A's namespace")
 			}
+
+			// Track preInst.ResourceID: after bidirectional failover it too is superseded.
+			supersededResourceIDs = append(supersededResourceIDs, preInst.ResourceID)
 		})
 
-		PIt("sequential failover leaves no orphaned resources", Label("cluster"), func() {
-			// TODO: collect resource IDs from prior failover steps and verify
-			// their deployments are cleaned up via countDeploymentsAcrossNamespaces
+		It("sequential failover leaves no orphaned resources", Label("cluster"), func() {
+			// After two rehydrations (A→B→A), every superseded resource ID must have
+			// zero active deployments across all provider namespaces. SPRM is expected
+			// to clean them up asynchronously; use Eventually with cleanupTimeout.
+			requireKubectl()
+
+			for _, oldID := range supersededResourceIDs {
+				oldID := oldID // capture loop var for closure
+				Eventually(func() int {
+					return countDeploymentsAcrossNamespaces(oldID)
+				}).WithTimeout(cleanupTimeout).WithPolling(pollInterval).Should(Equal(0),
+					"resource %s should have no active deployments after sequential failover (orphaned resource)", oldID)
+			}
 		})
 	})
 
@@ -158,9 +176,56 @@ var _ = Describe("Rehydration Failover", Label("rehydration", "failover", "disru
 			}
 		})
 
-		PIt("old resource is queued for deferred deletion", Label("cluster"), func() {
-			// TODO: query SPRM API with show_deleted=true to verify old resource_id
-			// appears in the deferred deletion queue
+		It("old resource is queued for deferred deletion", func() {
+			// After rehydration, the placement service calls DeleteRun on the old run,
+			// which calls SPRM DeleteInstance (non-deferred). The SPRM publishes a delete
+			// to providerA, but providerA is still stopped, so no deletion-acknowledged
+			// event arrives. The SPRM therefore keeps the old resource in
+			// deletion_status=SCHEDULED, which is visible via ?show_deleted=true.
+			//
+			// The resource field name in the list response is "id" (per SPRM OpenAPI).
+			// DeletionStatus "SCHEDULED" (or similar non-nil) confirms it is queued.
+
+			findOldResource := func() map[string]interface{} {
+				resp, err := doRequest(http.MethodGet, "/service-type-instances?show_deleted=true", "")
+				if err != nil || resp.StatusCode != http.StatusOK {
+					return nil
+				}
+				var body map[string]interface{}
+				decodeJSON(resp, &body)
+				instances, _ := body["instances"].([]interface{})
+				for _, inst := range instances {
+					m, _ := inst.(map[string]interface{})
+					if m["id"] == oldResourceID {
+						return m
+					}
+				}
+				return nil
+			}
+
+			// Use Eventually: placement manager processes the delete synchronously but
+			// the SPRM update may lag by a poll cycle.
+			var found map[string]interface{}
+			Eventually(func() bool {
+				found = findOldResource()
+				return found != nil
+			}).WithTimeout(cleanupTimeout).WithPolling(pollInterval).Should(BeTrue(),
+				"old resource %s should appear in ?show_deleted=true list after rehydration", oldResourceID)
+
+			Expect(found["deletion_status"]).NotTo(BeNil(),
+				"old resource should have deletion_status set (queued for deferred deletion)")
+
+			// Confirm it is absent from the active (non-deleted) list.
+			resp, err := doRequest(http.MethodGet, "/service-type-instances", "")
+			Expect(err).NotTo(HaveOccurred())
+			var activeBody map[string]interface{}
+			decodeJSON(resp, &activeBody)
+			activeInstances, _ := activeBody["instances"].([]interface{})
+			for _, inst := range activeInstances {
+				m, _ := inst.(map[string]interface{})
+				Expect(m["id"]).NotTo(Equal(oldResourceID),
+					"old resource should not appear in the active instance list")
+			}
 		})
 
 		It("cleanup completes when provider becomes healthy", Label("cluster"), func() {
