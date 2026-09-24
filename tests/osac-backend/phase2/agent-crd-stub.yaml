@@ -1,0 +1,37 @@
+# Minimal Agent CRD stub for Tier B osac-operator v0.0.18 compatibility.
+#
+# osac-operator v0.0.18 switched from direct-AAP provisioning to the Assisted
+# Installer Agent model.  The operator's ClusterOrder reconciler calls
+# List(agents.agent-install.openshift.io) to find available Agents before
+# dispatching to AAP.  Without this CRD the operator pod crashes on startup:
+#   "no matches for kind Agent in version agent-install.openshift.io/v1beta1"
+#
+# In Tier B we satisfy the type-system requirement with a stub CRD only; no
+# real Agent objects are created (and the reconciler will log "not enough agents
+# available, requeueing" indefinitely, which is expected — clusters stay
+# PROGRESSING rather than reaching ACTIVE).  This is Tier C territory.
+#
+# The hardware-inventory namespace referenced by the operator's watch config
+# is created separately by deploy-osac-backend.sh.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agents.agent-install.openshift.io
+  labels:
+    app.kubernetes.io/part-of: osac-sp-e2e-tierb
+spec:
+  group: agent-install.openshift.io
+  names:
+    kind: Agent
+    listKind: AgentList
+    plural: agents
+    singular: agent
+  scope: Namespaced
+  versions:
+  - name: v1beta1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        x-kubernetes-preserve-unknown-fields: true

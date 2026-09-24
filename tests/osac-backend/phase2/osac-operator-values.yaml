@@ -1,0 +1,47 @@
+# Phase 2 values for the osac-operator chart — local override for Tier B.
+#
+# This file is used in place of the upstream test/e2e/tierb-config/osac-operator-values.yaml
+# because we need chart version 0.0.18 (proto-compatible with fulfillment-service 0.0.107)
+# while the upstream file pins to v0.0.12.
+#
+# Compatibility note (Gaps 3 & 4 from FLPATH-4788):
+#   - Chart 0.0.12 / image v0.0.12: proto-INCOMPATIBLE with fulfillment-service 0.0.107.
+#     state_transition_time changed from `string` → `google.protobuf.Timestamp` (OSAC-2928),
+#     causing "string field contains invalid UTF-8" at gRPC unmarshal.
+#   - Chart 0.0.18 / image v0.0.18: proto-compatible.  Requires Agent CRD stub and
+#     hardware-inventory namespace (applied by deploy-osac-backend.sh before Helm install).
+#   - v0.0.18 uses the Assisted Installer Agent model for provisioning, so clusters will
+#     not reach ACTIVE automatically in Tier B (no real Agents exist).  The ACTIVE path
+#     is Tier C.  Tier B tests verify PROGRESSING status only (REQ-TB-012).
+
+image:
+  # The chart ships with a placeholder tag ("0.0.18") that doesn't exist on ghcr.io.
+  # Pin the specific nightly that was built against fulfillment-service 0.0.107 and
+  # is proto-compatible (OSAC-2928: state_transition_time Timestamp migration).
+  # To find newer nightly tags: skopeo list-tags docker://ghcr.io/osac-project/osac-operator
+  # Look for 0.0.18-nightly.* tags; higher date = more recent.
+  tag: "0.0.18-nightly.20260923.6f8db92.107.1"
+
+# BareMetalInstance must be enabled; v0.0.18 validation rejects CaaS-only configs.
+controllers:
+  clusterOrder: true
+  bareMetalInstance: true   # required by v0.0.18 — raises error if false with CaaS enabled
+  computeInstance: false
+  tenant: false
+  networking: false
+  networkingProvisioning: false
+  storage: false            # skips label-storageclass pre-install hook
+  volume: false
+
+# Points osac-operator's AAP client at this phase's own fake (REQ-TB-080).
+aap:
+  url: "http://osac-aap-mock:9093"
+  token: "tierb-aap-mock-token"
+  insecureSkipVerify: "true"
+
+# The chart's default (`default-ca`) doesn't exist on this cluster; Phase 1
+# already defines `osac-ca` (DD-151).
+certs:
+  issuerRef:
+    kind: ClusterIssuer
+    name: osac-ca

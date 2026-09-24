@@ -274,6 +274,10 @@ make teardown-osac-backend
 
 Credentials are static test-only values committed to git (`tests/osac-backend/realm.json`).
 The `osac-admin` client secret is `tierb-osac-admin-secret`. Never use these for real deployments.
+These follow the same convention as the upstream `dcm-project/osac-service-provider` repo, which
+commits identical `tierb-*` credentials in `test/e2e/manifests-tierb/` (public repo). Our
+`tests/osac-backend/` is a vendored copy of those manifests. If the credential convention
+ever needs to change (e.g. secret-scanning policy), it must be coordinated with the upstream.
 
 **Mac/Darwin — OCP backend requires port-forwarding:**
 

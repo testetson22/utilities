@@ -98,8 +98,10 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 				"CloudEvent specversion must be '1.0'")
 			Expect(matched.Type).To(Equal("dcm.status.cluster"),
 				"CloudEvent type should be dcm.status.cluster")
-			Expect(matched.Source).To(HavePrefix("osac-sp"),
-				"CloudEvent source should start with 'osac-sp' to identify the OSAC SP")
+			// Actual source format observed: "dcm/providers/osac-sp-cluster"
+			// The SP uses dcm/providers/<provider-name> — not just the bare "osac-sp" prefix.
+			Expect(matched.Source).To(HavePrefix("dcm/providers/osac-sp"),
+				"CloudEvent source must follow the dcm/providers/<provider-name> format; actual: %s", matched.Source)
 			Expect(matched.ID).NotTo(BeEmpty(),
 				"CloudEvent id must be set (unique per event)")
 			Expect(matched.DataContentType).To(Equal("application/json"),
@@ -108,7 +110,7 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 			// Data payload assertions — typed fields, no map casting
 			Expect(matched.Data.ID).To(Equal(clusterID))
 			Expect(osacClusterStatusValid(matched.Data.Status)).To(BeTrue(),
-				"status %q is not in the 7-value cluster vocabulary", matched.Data.Status)
+				"status %q is not in the 8-value cluster vocabulary", matched.Data.Status)
 			// message is a *string: non-nil means field is present (may be empty string).
 			Expect(matched.Data.Message).NotTo(BeNil(),
 				"data.message field should be present in the CloudEvent (may be empty string)")
@@ -175,8 +177,9 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 				"CloudEvent specversion must be '1.0'")
 			Expect(matched.Type).To(Equal("dcm.status.vm"),
 				"CloudEvent type should be dcm.status.vm")
-			Expect(matched.Source).To(HavePrefix("osac-sp"),
-				"CloudEvent source should start with 'osac-sp' to identify the OSAC SP")
+			// Actual source format observed: "dcm/providers/osac-sp-vm"
+			Expect(matched.Source).To(HavePrefix("dcm/providers/osac-sp"),
+				"CloudEvent source must follow the dcm/providers/<provider-name> format; actual: %s", matched.Source)
 			Expect(matched.ID).NotTo(BeEmpty(),
 				"CloudEvent id must be set (unique per event)")
 			Expect(matched.DataContentType).To(Equal("application/json"),

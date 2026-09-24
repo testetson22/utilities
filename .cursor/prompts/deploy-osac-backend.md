@@ -167,6 +167,16 @@ oc describe certificate ffs-keycloak -n osac-test-backend
 oc get clusterissuer osac-ca -o yaml
 ```
 
+### gRPC TLS / "certificate signed by unknown authority" errors
+
+**The SP always uses TLS** (unconditional since osac-service-provider#50 — `SP_OSAC_TLS_ENABLED`
+was removed). If you see a TLS verification error it means the custom CA cert is not wired in,
+not that TLS itself is the problem. The fix is to ensure `deploy/osac-ca.pem` is mounted and
+`SP_OSAC_TLS_CERT_FILE` + `SSL_CERT_FILE` point at it — not to disable TLS.
+
+`deploy-dcm.sh` does this automatically when `deploy/osac-backend.env` exists (it injects
+`tests/compose-osac-sp-tls.yaml`). If deploying manually, pass `--compose-file tests/compose-osac-sp-tls.yaml`.
+
 ### gRPC Route unreachable / TLS handshake failure
 ```bash
 # Confirm HTTP/2 is enabled on the ingress controller

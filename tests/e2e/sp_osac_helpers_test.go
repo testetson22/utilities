@@ -107,10 +107,13 @@ type osacHealthResponse struct {
 // osacCluster is a single cluster resource from GET /clusters/{id} or a list entry.
 // Kubeconfig is a pointer so nil distinguishes "field absent" from "field is empty string",
 // enabling the kubeconfig-absent-unless-ACTIVE assertion (REQ-GET-020/030).
+// Spec is captured as a raw map so persisted-field tests can inspect whatever the SP echoes
+// back without coupling to a hard-coded struct shape.
 type osacCluster struct {
-	ID         string  `json:"id"`
-	Status     string  `json:"status"`
-	Kubeconfig *string `json:"kubeconfig"`
+	ID         string                 `json:"id"`
+	Status     string                 `json:"status"`
+	Kubeconfig *string                `json:"kubeconfig"`
+	Spec       map[string]interface{} `json:"spec,omitempty"`
 }
 
 // osacClusterListResponse is the body returned by GET /clusters.
@@ -123,11 +126,13 @@ type osacClusterListResponse struct {
 // osacVM is a single VM resource from GET /vms/{id} or a list entry.
 // IP address fields are pointers so nil distinguishes "field absent" from
 // "field present but unknown (empty string)", per REQ-VMGET-030 / REQ-VMLIST-030.
+// Spec is captured as a raw map for persisted-field round-trip tests.
 type osacVM struct {
-	ID                string  `json:"id"`
-	Status            string  `json:"status"`
-	InternalIPAddress *string `json:"internal_ip_address"`
-	ExternalIPAddress *string `json:"external_ip_address"`
+	ID                string                 `json:"id"`
+	Status            string                 `json:"status"`
+	InternalIPAddress *string                `json:"internal_ip_address"`
+	ExternalIPAddress *string                `json:"external_ip_address"`
+	Spec              map[string]interface{} `json:"spec,omitempty"`
 }
 
 // osacVMListResponse is the body returned by GET /vms (AEP-132: results[] key).
@@ -246,8 +251,8 @@ func doOsacRequest(url, method, body string) (*http.Response, error) {
 func osacClusterPayload(name string) string {
 	req := osacClusterCreateRequest{
 		Spec: osacClusterSpec{
-			Version: "1.30",
-			Nodes:   osacClusterNodes{Worker: osacWorkerSpec{Count: 1}},
+			Version:  "1.30",
+			Nodes:    osacClusterNodes{Worker: osacWorkerSpec{Count: 1}},
 			Metadata: osacResourceMetadata{Name: name},
 			ProviderHints: osacProviderHints{
 				OSAC: osacBackendHints{
@@ -340,10 +345,12 @@ func deleteTestOsacVM(id string) {
 
 // ── Status vocabulary ──────────────────────────────────────────────────────
 
-// osacClusterStatusValid returns true if status is one of the 7-value cluster vocabulary.
+// osacClusterStatusValid returns true if status is one of the 8-value cluster vocabulary.
+// The original spec defined 7 values; "PROGRESSING" was subsequently observed from the
+// live fulfillment-service backend as an alias/intermediate for PROVISIONING.
 func osacClusterStatusValid(status string) bool {
 	switch status {
-	case "PROVISIONING", "ACTIVE", "FAILED", "DELETING", "DELETED", "STOPPED", "STOPPING":
+	case "PROVISIONING", "PROGRESSING", "ACTIVE", "FAILED", "DELETING", "DELETED", "STOPPED", "STOPPING":
 		return true
 	}
 	return false

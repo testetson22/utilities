@@ -1,0 +1,66 @@
+# osac-aap-mock (REQ-TB-080, Phase 2): this repo's own binary, faking just
+# enough of AAP's REST surface for real osac-operator/BMFO reconciliation
+# to reach a terminal state (DD-213/214). Same manifest style as
+# postgres.yaml — a plain Deployment+Service, no chart.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: osac-aap-mock
+  labels:
+    app.kubernetes.io/name: osac-aap-mock
+    app.kubernetes.io/part-of: osac-sp-e2e-tierb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: osac-aap-mock
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: osac-aap-mock
+    spec:
+      containers:
+        - name: osac-aap-mock
+          # Published from dcm-project/osac-service-provider Containerfile.osac-aap-mock.
+          # Upstream CI builds this locally and loads into kind; we push to Quay so it
+          # is pullable on OCP without a local build step.
+          image: quay.io/dcm-project/osac-aap-mock:tierb
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 9093
+              protocol: TCP
+          env:
+            - name: MOCK_AAP_ADDRESS
+              value: ":9093"
+            # Shared secret with osac-operator's own `aap.token` Helm value
+            # (test/e2e/tierb-config/osac-operator-values.yaml) — this mock
+            # rejects any request that doesn't present it (DD-225).
+            - name: MOCK_AAP_TOKEN
+              value: "tierb-aap-mock-token"
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: osac-aap-mock
+  labels:
+    app.kubernetes.io/name: osac-aap-mock
+    app.kubernetes.io/part-of: osac-sp-e2e-tierb
+spec:
+  selector:
+    app.kubernetes.io/name: osac-aap-mock
+  ports:
+    - name: http
+      port: 9093
+      targetPort: http
+      protocol: TCP
