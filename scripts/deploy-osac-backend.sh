@@ -1006,9 +1006,64 @@ wait_local_port() {
     return 1
 }
 
+ensure_keycloak_organizations() {
+    local keycloak_port="$1"
+    local token organization response http_code
+
+    token="$(curl --fail --silent --show-error \
+        --resolve "ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}:127.0.0.1" \
+        --cacert "${DEPLOY_DIR}/osac-ca.pem" \
+        --request POST \
+        "https://ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}/realms/master/protocol/openid-connect/token" \
+        -d 'client_id=admin-cli' \
+        -d 'username=admin' \
+        -d 'password=tierb-keycloak-admin-password' \
+        -d 'grant_type=password' \
+        | jq -r '.access_token')"
+    if [[ -z "${token}" || "${token}" == "null" ]]; then
+        err "Failed to obtain Keycloak admin token — organization initialization aborted"
+        return 1
+    fi
+
+    for organization in system shared; do
+        response="$(curl --fail --silent --show-error \
+            --resolve "ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}:127.0.0.1" \
+            --cacert "${DEPLOY_DIR}/osac-ca.pem" \
+            --get \
+            --data-urlencode "exact=true" \
+            --data-urlencode "search=${organization}" \
+            -H "Authorization: Bearer ${token}" \
+            "https://ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}/admin/realms/osac/organizations")"
+        if jq -e --arg name "${organization}" 'any(.[]; .name == $name)' <<<"${response}" >/dev/null; then
+            info "  Keycloak organization '${organization}' already exists"
+            continue
+        fi
+
+        http_code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --resolve "ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}:127.0.0.1" \
+            --cacert "${DEPLOY_DIR}/osac-ca.pem" \
+            --request POST \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"name\":\"${organization}\",\"alias\":\"${organization}\",\"domains\":[{\"name\":\"${organization}\"}]}" \
+            "https://ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}/admin/realms/osac/organizations")"
+        if [[ "${http_code}" != 201 && "${http_code}" != 409 ]]; then
+            err "Failed to initialize Keycloak organization '${organization}' (HTTP ${http_code})"
+            return 1
+        fi
+        info "  Keycloak organization '${organization}' initialized (HTTP ${http_code})"
+    done
+}
+
 _register_fixtures_body() {
     local internal_api_port="$1"
     local keycloak_port="$2"
+
+    # Keycloak imports the realm clients but does not import Organizations. The
+    # fulfillment controller requires these two organizations before it can
+    # create tenant groups or dispatch ClusterOrders. Initialize them before
+    # registering Phase 2 fixtures; the operation is idempotent for redeploys.
+    ensure_keycloak_organizations "${keycloak_port}"
 
     # Get OIDC token (client credentials — no browser interaction)
     local token
@@ -1024,13 +1079,13 @@ _register_fixtures_body() {
         return 1
     fi
 
-    # Kubeconfig for the Hub: in-cluster endpoint so the fulfillment-service
-    # (running inside OCP) can reach the API server via kubernetes.default.svc.
+    # Kubeconfig for the Hub. Preserve the authenticated OCP API endpoint from
+    # the active oc context: replacing it with kubernetes.default.svc causes
+    # the fulfillment controller's discovery client to lose the API-server
+    # authentication context in this OCP deployment.
     # Use `oc` (already required) rather than `kubectl`.
     local kubeconfig_b64
-    kubeconfig_b64="$(oc config view --raw --minify \
-        | sed -E 's#server: https://[^[:space:]]+#server: https://kubernetes.default.svc#' \
-        | base64 | tr -d '\n')"
+    kubeconfig_b64="$(oc config view --raw --minify | base64 | tr -d '\n')"
 
     grpc_create() {
         # grpc_create LABEL SERVICE METHOD JSON_BODY
@@ -1062,9 +1117,36 @@ _register_fixtures_body() {
     }
 
     info "  Registering Hub"
-    grpc_create "Hub" osac.private.v1.Hubs Create \
-        "{\"object\":{\"metadata\":{\"name\":\"default-hub\"},\"spec\":{\"kubeconfig\":\"${kubeconfig_b64}\",\"namespace\":\"default\"}}}" \
-        || return 1
+    local hub_body
+    hub_body="{\"object\":{\"metadata\":{\"name\":\"default-hub\"},\"spec\":{\"kubeconfig\":\"${kubeconfig_b64}\",\"namespace\":\"default\"}}}"
+    grpc_create "Hub" osac.private.v1.Hubs Create "${hub_body}" || return 1
+    # Create is intentionally idempotent, but an existing Hub may still carry
+    # a stale kubeconfig from an earlier deployment. Always update it with the
+    # currently authenticated oc context so controller discovery uses valid
+    # credentials.
+    local hub_update_body hub_update_result hub_update_rc=0
+    hub_update_body="$(grpcurl -insecure \
+        -H "Authorization: Bearer ${token}" \
+        "127.0.0.1:${internal_api_port}" \
+        osac.private.v1.Hubs/List \
+        | jq -c --arg kc "${kubeconfig_b64}" \
+            '(.items[] | select(.metadata.name == "default-hub")) as $hub
+             | {object: ($hub | .spec.kubeconfig = $kc)}')"
+    if [[ -z "${hub_update_body}" || "${hub_update_body}" == "null" ]]; then
+        err "  Hub update failed: default-hub was not returned by Hubs/List"
+        return 1
+    fi
+    hub_update_result="$(grpcurl -insecure \
+        -H "Authorization: Bearer ${token}" \
+        -d "${hub_update_body}" \
+        "127.0.0.1:${internal_api_port}" \
+        osac.private.v1.Hubs/Update 2>&1)" || hub_update_rc=$?
+    if [[ "${hub_update_rc}" -ne 0 ]]; then
+        err "  Hub update failed (grpcurl exit ${hub_update_rc}):"
+        echo "${hub_update_result}" >&2
+        return 1
+    fi
+    info "  Hub kubeconfig updated"
 
     info "  Registering HostType"
     grpc_create "HostType" osac.public.v1.HostTypes Create \
