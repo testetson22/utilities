@@ -89,6 +89,15 @@
 
   "defaultDefaultClientScopes": ["basic", "username", "groups"],
 
+  "roles": {
+    "realm": [
+      {
+        "name": "tenant-idp-manager",
+        "description": "OSAC fulfillment-service tenant identity-provider manager role"
+      }
+    ]
+  },
+
   "clients": [
     {
       "clientId": "osac-cli",

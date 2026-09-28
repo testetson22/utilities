@@ -4,7 +4,7 @@
 |---|---|
 | **Epic** | [FLPATH-4758](https://redhat.atlassian.net/browse/FLPATH-4758) — [Test Plan] Testing for DCM: OSAC provider |
 | **Product epic** | [FLPATH-4459](https://redhat.atlassian.net/browse/FLPATH-4459) — DCM: OSAC service provider |
-| **Status** | Draft — Tier C lifecycle cases are not implemented; Tier B+ dispatch discovery is implemented as opt-in diagnostic coverage and is currently blocked at TBP-020 in the tested Phase 2 environment |
+| **Status** | Draft — Tier C lifecycle cases are not implemented; Tier B++ dispatch discovery is implemented as opt-in OCP-backed orchestration-boundary coverage. TBP-010 and TBP-020 pass in the tested Phase 2 environment; TBP-030 currently fails because the linked ClusterOrder remains without `status.conditions` |
 | **Depends on** | Upstream Tier B (`TC-TB-*`, kind stack in `osac-service-provider`) + utilities self-contained OCP backend (Tier B stack port) + `make test-osac-sp` API lifecycle |
 
 ### Where utilities sits today
@@ -147,7 +147,7 @@ The table in each test case below explicitly calls out whether the case:
   unreachable in Tier B due to AAP mock / static fixtures)
 - **Net-new** (tests scenarios that have no Tier B equivalent at all)
 
-## Intermediate milestone: Tier B+ dispatch and allocation (diagnostic implementation; not yet passing)
+## Intermediate milestone: Tier B++ dispatch boundary (diagnostic implementation; TBP-030 currently failing)
 
 **Goal:** establish exactly how far a request through the DCM OSAC SP reaches the real
 fulfillment-service, osac-operator, and BMFO *without* BMC/Ironic or a ready cluster.
@@ -155,6 +155,16 @@ This is an orchestration-boundary test, not a claim of bare-metal provisioning. 
 existing `tests/e2e/sp_osac_cluster_api_test.go` checks API CRUD, IDs, list, and status;
 `tests/e2e/sp_osac_status_test.go` checks one CloudEvent after create. Neither currently
 correlates a request with a ClusterOrder, BareMetalInstance, selected host, or AAP job.
+
+**Tier B++ scope:** this is the OCP-backed tier between the self-contained Tier B API
+tests and real Tier C infrastructure. It validates the DCM SP-to-fulfillment-service
+boundary, OpenShift authentication and resource discovery, exact SP ID to ClusterOrder
+linkage, request translation, NATS correlation, and the observable operator stop point.
+It does **not** prove Agent allocation, AAP execution, BMC/Ironic access, bare-metal
+provisioning, `ACTIVE` state, kubeconfig usability, VM networking, or successful cleanup
+of real infrastructure. Moving from Kind/Tier B to OCP is meaningful for deployment,
+RBAC, TLS, namespace, CRD, service-network, and controller-initialization failures, but
+does not substitute for Tier C lifecycle coverage.
 
 **Preconditions:** explicitly opt in to the Phase 2 backend (do not use `--skip-phase2`);
 confirm the operator and BMFO are running, the intended ClusterTemplate/HostType/Hub
@@ -184,30 +194,29 @@ observed, and do not treat their absence as success.
 
 The opt-in implementation in `tests/e2e/sp_osac_dispatch_test.go` has been compiled and
 run against the OCP Phase 2 backend. TBP-010 passed: the SP returned 201, GET/list
-resolved the same ID, and a matching `dcm.cluster` CloudEvent was observed. TBP-020
-failed after its bounded window because no `ClusterOrder` appeared in any namespace;
-TBP-030 was consequently not evaluated. No `BareMetalInstance` or Agent objects were
-present; only the Agent CRD was installed.
+resolved the same ID, and a matching `dcm.cluster` CloudEvent was observed. ClusterOrder
+discovery uses `oc get clusterorders -A` and retains each object's namespace for
+subsequent retrieval. TBP-020 now passes: a new order is created in the `default`
+namespace and carries a stable label linking it to the exact SP cluster ID. TBP-030
+fails after its bounded window because the linked order remains without
+`status.conditions`; no named `blocked: no available Agents` condition is emitted. No
+`BareMetalInstance` or Agent objects are present; only the Agent CRD is installed.
 
-The observed stop point is currently the fulfillment-service/controller boundary, not
-the osac-operator. Fulfillment-controller logs reported failures resolving Keycloak
-server groups and missing `system`/`shared` organizations while reconciling the created
-clusters. Independent checks show that the controller and IDP credential files match
-the Kubernetes Secret, a fresh client-credentials token is valid, and direct Keycloak
-groups/organizations requests return HTTP 200. Those responses contain no `system` or
-`shared` organizations, so the issue is currently characterized as an application-level
-fulfillment-controller initialization/reconciliation problem rather than a basic
-credential or connectivity failure. The backend's HTTP health endpoint still reports
-healthy, making controller reconciliation logs and downstream-object absence required
-diagnostics rather than a sufficient health signal. Resolve or explicitly document this
-backend initialization condition before treating TBP-020 as an operator or Agent failure.
+The observed stop point is after fulfillment-service creates the ClusterOrder, before
+the osac-operator writes status. Fulfillment-controller logs show successful tenant
+initialization and order creation, while osac-operator logs show no corresponding status
+transition before cleanup. Keycloak 26.6.0 is deployed, and the `system`/`shared`
+Organizations plus `tenant-idp-manager` realm role are present. The tested environment
+still has no Agent objects, so the absence of a named blocked condition must remain a
+diagnostic failure rather than being treated as successful reconciliation. Resolve or
+explicitly document this operator/backend condition before enabling allocation assertions.
 
 ### Proposed assertions and explicit gates
 
 | ID | Evidence after a single SP create | Pass criterion / gate |
 |----|-----------------------------------|-----------------------|
-| TBP-010 | SP returns 201 and ID; GET/list resolve the same ID; NATS subscription started before create observes an event for that exact ID | Exact response, identity, and observed status/event; not just non-empty results or any event. Implement as opt-in Tier B+ coverage, separate from existing API CRUD tests. |
-| TBP-020 | A new ClusterOrder is observed in the discovered namespace | Require exactly the object linked to this request, with the expected template/host intent where exposed, plus a recorded nonterminal condition. If no ClusterOrder appears, **fail this gate** and report SP → backend → operator boundary; do not claim dispatch. |
+| TBP-010 | SP returns 201 and ID; GET/list resolve the same ID; NATS subscription started before create observes an event for that exact ID | Exact response, identity, and observed status/event; not just non-empty results or any event. Implement as opt-in Tier B++ coverage, separate from existing API CRUD tests. |
+| TBP-020 | A new ClusterOrder is observed in the discovered namespace | Require exactly the object linked to this request, with the expected template/host intent where exposed. Status conditions are evaluated by TBP-030; if no ClusterOrder appears, **fail this gate** and report the SP → backend → operator boundary; do not claim dispatch. |
 | TBP-030 | Operator progresses or remains blocked | Assert the actual, named condition/reason associated with the linked ClusterOrder and corresponding SP status/event. If the Agent prerequisite blocks it, explicitly report `blocked: no available Agents` rather than claiming AAP or BMFO was exercised. Confirm field names and status mapping in the discovery gate. |
 | TBP-040 | Allocation objects / selected BMH, **only after** the operator has the prerequisites to create them | If discovery shows this branch is reachable, require a linked BareMetalInstance and a specific selected fixture/host and state change; verify requested cardinality, no competing run's host, and failure on the wrong assignment. If unreachable with the Agent stub, mark this entire gate **not yet enabled**, not a passing test or an unconditional skip in an enabled suite. |
 | TBP-050 | Mock AAP dispatch, **only if the discovery gate shows it is reachable** | Match a request/job identifier and intended template/inventory to this ClusterOrder. Determine its actual ordering relative to allocation from observation; do not assume one precedes the other. A mock success response or SP 201 alone does not prove AAP invocation; real AAP is a separate milestone. |
@@ -229,7 +238,8 @@ Tier C `TC-TC-*` IDs for these intermediate tests.
 
 1. **Dispatch gate:** TBP-010/020/030 pass reproducibly in Phase 2; publish the
    observed stop condition and traceable object IDs. This validates SP submission and
-   the *reachable* control-plane path, not allocation.
+   the *reachable* control-plane path, not allocation. Current evidence is TBP-010/020
+   pass and TBP-030 fail due to the missing ClusterOrder status condition.
 2. **Allocation gate:** provision suitable test Agents or a contract-faithful simulator
    **only after** determining what the operator actually requires. Enable TBP-040/050
    only when their path is reachable and the host assignment/job can be correlated.
@@ -377,7 +387,7 @@ All poll-based assertions should use `Eventually` with a polling interval of **3
 
 **Note:** The `make test-osac-sp` target runs the **existing** Tier A/B OSAC SP E2E tests
 (input validation, API lifecycle, NATS events). The opt-in `tier-b-dispatch` diagnostic
-implementation (currently TBP-010–030; TBP-040–060 remain discovery-gated) is not
+Tier B++ implementation (currently TBP-010–030; TBP-040–060 remain discovery-gated) is not
 included by the default `osac` label unless the `tier-b-dispatch` label is selected.
 The Tier C provisioning-lifecycle tests
 described in this plan (TC-TC-100 through TC-TC-405) are **not yet implemented** in Go
@@ -431,7 +441,7 @@ To run Tier C in CI the following would be required:
 
 | Requirement | Detail |
 |-------------|--------|
-| Tier B+ gate before Tier C | Add the opt-in `tier-b-dispatch` tests to an isolated Phase 2 OCP job only after the discovery gate confirms reachable checkpoints; report blocked allocation separately from failures. This is not a hardware-provisioning CI gate. |
+| Tier B++ gate before Tier C | Add the opt-in `tier-b-dispatch` tests to an isolated Phase 2 OCP job only after the discovery gate confirms reachable checkpoints; report blocked allocation separately from failures. This validates the OCP orchestration boundary, not hardware provisioning. |
 | Dedicated CI environment | A MOC project/namespace reserved for Tier C CI; must not be shared with developer runs |
 | Bare metal pool reservation | A mechanism to claim/release BareMetalHosts so parallel CI runs don't contend; TBD whether this is handled by the fulfillment-service itself or a CI-layer reservation system |
 | Credential injection | Real MOC/OSAC credentials injected via CI secrets (e.g. Vault + Jenkins credential binding, or OpenShift Secrets synced from Vault); never in git |
@@ -458,7 +468,7 @@ To run Tier C in CI the following would be required:
 | DD-010 | Health always returns HTTP 200; detail absent when healthy, present when degraded | TC-TC-010, TC-TC-300 (detail on FAILED) |
 | DD-080 / REQ-DELETE-020 | OSAC SP tolerates NotFound from backend on DELETE | TC-TC-155 (implicitly, after DELETED state) |
 | TBD | AAP job template invocation via fulfillment-service | TC-TC-040, TC-TC-100, TC-TC-200 |
-| TBD | SP → ClusterOrder dispatch and prerequisite/stop condition without hardware | Diagnostic TBP-010/020/030 implementation; TBP-010 passes in the tested Phase 2 environment, TBP-020 is blocked at the fulfillment-service/controller boundary; extends into TC-TC-100/105 |
+| TBD | SP → ClusterOrder dispatch and prerequisite/stop condition without hardware | Tier B++ diagnostic TBP-010/020/030 implementation; TBP-010/020 pass in the tested Phase 2 environment, while TBP-030 currently fails because no linked ClusterOrder status condition is emitted; extends into TC-TC-100/105 |
 | TBD | Linked simulated host allocation / mock AAP dispatch, if reachable with suitable Agents | Proposed TBP-040/050 (not enabled until discovery); real allocation in TC-TC-110/115 and real AAP in TC-TC-040 |
 | TBD | BMFO BareMetalInstance lifecycle | TC-TC-110, TC-TC-115 |
 | TBD | Real network/IP allocation for VMs | TC-TC-210, TC-TC-215 |

@@ -116,8 +116,8 @@ var _ = Describe("OSAC SP — Tier B+ dispatch discovery", Label("sp", "osac", "
 	It("TBP-020 discovers a new ClusterOrder with verified linkage to the SP ID", func() {
 		Eventually(func() error {
 			orders := osacClusterOrders()
-			for name, order := range orders {
-				if _, existed := beforeOrders[name]; existed {
+			for key, order := range orders {
+				if _, existed := beforeOrders[key]; existed {
 					continue
 				}
 				if osacObjectReferencesID(order, clusterID) {
@@ -136,9 +136,10 @@ var _ = Describe("OSAC SP — Tier B+ dispatch discovery", Label("sp", "osac", "
 	It("TBP-030 reports a linked ClusterOrder condition and corresponding SP state", func() {
 		Expect(clusterOrder).NotTo(BeNil(), "TBP-020 must establish the linked ClusterOrder first")
 		name := osacObjectName(clusterOrder)
+		namespace := osacObjectNamespace(clusterOrder)
 		var conditions []interface{}
 		Eventually(func() error {
-			current, err := osacGetClusterOrder(name)
+			current, err := osacGetClusterOrder(name, namespace)
 			if err != nil {
 				return err
 			}
@@ -191,21 +192,24 @@ func requireOSACKubectl() {
 }
 
 func osacClusterOrders() map[string]map[string]interface{} {
-	out, err := runOSACKubectl("get", "clusterorders", "-o", "json")
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "list ClusterOrders in %s", osacKubernetesNamespace())
+	out, err := runOSACKubectlAll("get", "clusterorders", "-A", "-o", "json")
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "list ClusterOrders across all namespaces")
 	var list struct {
 		Items []map[string]interface{} `json:"items"`
 	}
 	ExpectWithOffset(1, json.Unmarshal([]byte(out), &list)).To(Succeed())
 	orders := make(map[string]map[string]interface{}, len(list.Items))
 	for _, item := range list.Items {
-		orders[osacObjectName(item)] = item
+		orders[osacObjectKey(item)] = item
 	}
 	return orders
 }
 
-func osacGetClusterOrder(name string) (map[string]interface{}, error) {
-	out, err := runOSACKubectl("get", "clusterorders", name, "-o", "json")
+func osacGetClusterOrder(name, namespace string) (map[string]interface{}, error) {
+	if namespace == "" {
+		return nil, fmt.Errorf("ClusterOrder %s has no metadata.namespace", name)
+	}
+	out, err := runOSACKubectlAll("get", "clusterorders", name, "-n", namespace, "-o", "json")
 	if err != nil {
 		return nil, err
 	}
@@ -218,10 +222,18 @@ func osacGetClusterOrder(name string) (map[string]interface{}, error) {
 
 func runOSACKubectl(args ...string) (string, error) {
 	full := append([]string{"-n", osacKubernetesNamespace()}, args...)
-	cmd := exec.Command(kubectlBin, full...)
+	return runOSACKubectlArgs(full)
+}
+
+func runOSACKubectlAll(args ...string) (string, error) {
+	return runOSACKubectlArgs(args)
+}
+
+func runOSACKubectlArgs(args []string) (string, error) {
+	cmd := exec.Command(kubectlBin, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(out), fmt.Errorf("%s %v: %w", kubectlBin, full, err)
+		return string(out), fmt.Errorf("%s %v: %w", kubectlBin, args, err)
 	}
 	return string(out), nil
 }
@@ -230,6 +242,16 @@ func osacObjectName(object map[string]interface{}) string {
 	metadata, _ := object["metadata"].(map[string]interface{})
 	name, _ := metadata["name"].(string)
 	return name
+}
+
+func osacObjectNamespace(object map[string]interface{}) string {
+	metadata, _ := object["metadata"].(map[string]interface{})
+	namespace, _ := metadata["namespace"].(string)
+	return namespace
+}
+
+func osacObjectKey(object map[string]interface{}) string {
+	return osacObjectNamespace(object) + "/" + osacObjectName(object)
 }
 
 func osacObjectReferencesID(object map[string]interface{}, id string) bool {

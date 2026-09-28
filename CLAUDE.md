@@ -266,6 +266,17 @@ The backend namespace is `osac-test-backend` by default. Teardown — `deploy-dc
 does **not** remove the backend on its own (it only tears down the compose stack); either
 couple it explicitly or use the standalone target:
 
+**Tier B++ dispatch boundary:** The opt-in `tier-b-dispatch` suite is an OCP-backed
+orchestration-boundary tier between the self-contained Tier B API tests and real Tier C
+infrastructure. It validates OpenShift authentication/resource discovery, exact SP ID to
+ClusterOrder linkage, request translation, NATS correlation, and the observable operator
+stop point. It does not prove Agent allocation, AAP execution, BMC/Ironic access, real
+bare-metal provisioning, `ACTIVE` state, kubeconfig usability, VM networking, or real
+infrastructure cleanup. The current Phase 2 result is TBP-010/TBP-020 passing and TBP-030
+failing because the linked ClusterOrder has no `status.conditions`; this is not a Tier C
+substitute. TBP-040/050 remain disabled until suitable Agent resources or a
+contract-faithful simulator makes those paths reachable.
+
 ```bash
 ./scripts/deploy-dcm.sh --deploy-osac-backend --tear-down   # tears down compose stack + OSAC backend
 # or, if the backend was deployed separately:

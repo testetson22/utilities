@@ -745,7 +745,11 @@ deploy_phase2() {
     local phase2_dir="${MANIFESTS_DIR}/phase2"
     local tmp_dir
     tmp_dir="$(mktemp -d)"
-    trap 'rm -rf "${tmp_dir}"' RETURN
+    # Expand the temporary path when installing the trap. RETURN traps run
+    # after this function's local variables have gone out of scope; referring
+    # to ${tmp_dir} from the trap body would trigger set -u and abort deploy.
+    # shellcheck disable=SC2064
+    trap "rm -rf -- '${tmp_dir}'" RETURN
 
     log "Deploying Phase 2 components (osac-operator, BMFO, aap-mock, fixtures)"
     info "Fetching upstream manifests at ref ${OSAC_SP_UPSTREAM_REF}"
@@ -1055,6 +1059,49 @@ ensure_keycloak_organizations() {
     done
 }
 
+ensure_keycloak_roles() {
+    local keycloak_port="$1"
+    local token role_status create_status
+
+    token="$(curl --fail --silent --show-error \
+        --resolve "ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}:127.0.0.1" \
+        --cacert "${DEPLOY_DIR}/osac-ca.pem" \
+        --request POST \
+        "https://ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}/realms/master/protocol/openid-connect/token" \
+        -d 'client_id=admin-cli' \
+        -d 'username=admin' \
+        -d 'password=tierb-keycloak-admin-password' \
+        -d 'grant_type=password' \
+        | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')"
+
+    role_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+        --resolve "ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}:127.0.0.1" \
+        --cacert "${DEPLOY_DIR}/osac-ca.pem" \
+        -H "Authorization: Bearer ${token}" \
+        "https://ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}/admin/realms/osac/roles/tenant-idp-manager")"
+    if [[ "${role_status}" == "200" ]]; then
+        info "  Keycloak realm role 'tenant-idp-manager' already exists"
+        return 0
+    fi
+    if [[ "${role_status}" != "404" ]]; then
+        err "Failed to check Keycloak realm role 'tenant-idp-manager' (HTTP ${role_status})"
+        return 1
+    fi
+
+    create_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+        --resolve "ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}:127.0.0.1" \
+        --cacert "${DEPLOY_DIR}/osac-ca.pem" \
+        -H "Authorization: Bearer ${token}" \
+        -H 'Content-Type: application/json' \
+        -d '{"name":"tenant-idp-manager","description":"OSAC fulfillment-service tenant identity-provider manager role"}' \
+        "https://ffs-keycloak.${NS}.svc.cluster.local:${keycloak_port}/admin/realms/osac/roles")"
+    if [[ "${create_status}" != "201" && "${create_status}" != "409" ]]; then
+        err "Failed to initialize Keycloak realm role 'tenant-idp-manager' (HTTP ${create_status})"
+        return 1
+    fi
+    info "  Keycloak realm role 'tenant-idp-manager' initialized (HTTP ${create_status})"
+}
+
 _register_fixtures_body() {
     local internal_api_port="$1"
     local keycloak_port="$2"
@@ -1064,6 +1111,7 @@ _register_fixtures_body() {
     # create tenant groups or dispatch ClusterOrders. Initialize them before
     # registering Phase 2 fixtures; the operation is idempotent for redeploys.
     ensure_keycloak_organizations "${keycloak_port}"
+    ensure_keycloak_roles "${keycloak_port}"
 
     # Get OIDC token (client credentials — no browser interaction)
     local token
