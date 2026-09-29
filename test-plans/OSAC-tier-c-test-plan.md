@@ -41,6 +41,37 @@ This document covers the **Tier C** (real infrastructure) test suite for the OSA
 | Provisioning time | Milliseconds | Seconds–minutes (BMFO reconciles; AAP mock returns instantly) | **10–30 minutes** per cluster; VM provisioning similarly slow |
 | Test IDs | Tier A / mock E2E in osac-sp | `TC-TB-*` (osac-sp); utilities `sp_osac_*` (not `TC-TB-*`) | `TC-TC-*` (this plan; not yet in Go) |
 
+### Test Environment Topologies and Coverage
+
+OCP topology affects the capacity and failure modes available to the test environment; it does
+not by itself determine the OSAC tier. Tier C requires the real AAP, Agent/BMFO/Ironic, and
+provisioning behavior described below. A compact cluster running only the Tier B backend remains
+Tier B/Tier B++, while a SNO connected to real external services may validate their interface
+contracts without proving multi-node provisioning.
+
+| Deployment topology | Default resources | Useful OSAC coverage | Important limits |
+|---------------------|-------------------|----------------------|------------------|
+| SNO | 1 master/worker: 18 CPU, 64 GiB RAM, 200 GB disk | Tier B API and Tier B++ dispatch; can use an external AAP or the Tier B mock. Suitable for a small single-target virtual BMC/discovery experiment if capacity permits. | One schedulable node; cannot spread controller replicas across nodes. The 64 GiB node budget is not enough to assume a redundant in-cluster AAP deployment after OCP overhead. Not a meaningful multi-node hosted-cluster or distributed-storage test. |
+| Compact | 3 masters acting as workers: 18 CPU and 40 GiB RAM each; 54 CPU/120 GiB aggregate; 150 GB disk each (450 GB aggregate) | Tier B++; can schedule AAP controller replicas across OCP nodes and host a bounded virtual Agent/BMC pilot, subject to measured post-deployment capacity. **Selected edge94 pilot profile: compact + HPP; deployment is pending.** | All nodes still share the edge94 physical host. HPP volumes are node-bound and do not provide storage failover. The aggregate defaults are not a guarantee that AAP or full provisioning will fit; verify node allocatable/requested resources and host headroom. |
+| Standard | 3 masters: 10 CPU/18 GiB each; 3 workers: 12 CPU/32 GiB each; 66 CPU/150 GiB aggregate; 100 GB disk each (600 GB aggregate) | Tier B++ and greater scheduling capacity for AAP and multiple virtual targets; suitable for broader multi-node integration where its resources are available. | Larger footprint. It remains a single-host failure domain if all six OCP VMs run on one hypervisor. ODF is only an option when the deployment satisfies its multi-node and `WORKER_MEMORY >= 48000` requirements. |
+
+**Storage selection:** HPP is appropriate for the initial contract-focused pilot when PVC data is
+disposable and node-loss recovery is not under test. A database or other HPP-backed PVC can become
+unavailable if its node is lost; do not interpret two AAP controller replicas as storage/database
+HA. Use Longhorn or another replicated storage option only if cross-node persistent-data recovery
+is an explicit test objective. S4 object storage is not required for the initial AAP dispatch
+contract tests. SNO cannot use ODF, and the compact profile's 40 GiB node memory is below the
+stated 48 GiB ODF worker-memory requirement unless that profile is changed.
+
+**AAP sizing note:** the planning estimate for a small two-controller AAP deployment is 12–16
+vCPU, 44–56 GiB RAM, and 80–100 GiB persistent storage. This is a planning envelope, not a
+vendor-published OpenShift minimum; validate it against the exact AAP release, operator topology,
+and job concurrency. On SNO, prefer an external AAP instance for this test. On compact, confirm
+scheduling and memory headroom after OCP and OSAC workloads are running before installing AAP.
+Redundant controllers on compact nodes provide controller/pod-level testing only, not physical
+host HA. Physical-host failure testing belongs to DCM platform-resilience coverage and is outside
+this OSAC SP plan.
+
 ### When to Run
 
 Tier C is **not a per-PR gate**. Run it:
