@@ -12,12 +12,11 @@
 #     --osac-service-provider \
 #     --compose-file tests/compose-osac-sp-tls.yaml
 #
-# Requires: OSAC_CA_CERT_FILE env var pointing at the CA cert file written by
-# deploy-osac-backend.sh (default: deploy/osac-ca.pem).
+# Requires: OSAC_CA_CERT_FILE env var pointing at a readable CA certificate.
 
 services:
   osac-service-provider:
     volumes:
-      - "${OSAC_CA_CERT_FILE:-./deploy/osac-ca.pem}:/etc/osac/ca.pem:ro"
+      - "${OSAC_CA_CERT_FILE:?Set OSAC_CA_CERT_FILE to a CA certificate file}:/etc/osac/ca.pem:ro"
     environment:
       SP_OSAC_TLS_CERT_FILE: /etc/osac/ca.pem

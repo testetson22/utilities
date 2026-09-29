@@ -40,6 +40,8 @@ readonly VERSION_ENV_VARS=(
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly GITOPS_COMPOSE_OVERRIDE="${REPO_ROOT}/tests/compose-gitops.yaml"
+# shellcheck source=scripts/osac-ca.sh
+source "${REPO_ROOT}/scripts/osac-ca.sh"
 
 # --- Provider registry ----------------------------------------------------- #
 #
@@ -193,6 +195,7 @@ EOF
   MCE_CHANNEL               Override MCE subscription channel (auto-detect)
   CSV_TIMEOUT               Seconds to wait for operator CSV (default: 300)
   DEPLOY_TIMEOUT            Seconds to wait for ACM/MCE CR readiness (default: 1200)
+  OSAC_CA_CERT_FILE         PEM CA certificate for the OSAC backend TLS overlay
 
 Examples:
   $(basename "$0")
@@ -388,23 +391,19 @@ validate_acm_cluster_provider() {
 }
 
 validate_osac_provider() {
-    # OSAC SP needs no cluster access — validate credentials and env-agent dependency only.
+    # OSAC SP needs no cluster access — validate credentials, CA, and env-agent dependency.
     log "Validating OSAC service provider prerequisites"
 
     # Auto-detect and wire in a backend deployed via scripts/deploy-osac-backend.sh.
     # This makes --osac-service-provider turn-key: no manual `source` of the backend
     # env file and no manual --compose-file for the TLS CA overlay.
     local osac_backend_env="${REPO_ROOT}/deploy/osac-backend.env"
+    local osac_backend_env_found=false
     if [[ -f "${osac_backend_env}" ]]; then
+        osac_backend_env_found=true
         info "Found OSAC backend env file: ${osac_backend_env} (sourcing)"
         # shellcheck source=/dev/null
         source "${osac_backend_env}"
-
-        local osac_tls_overlay="${REPO_ROOT}/tests/compose-osac-sp-tls.yaml"
-        if [[ -n "${OSAC_CA_CERT_FILE:-}" ]] && [[ -f "${osac_tls_overlay}" ]]; then
-            COMPOSE_EXTRA_FILE_ARGS+=("-f" "${osac_tls_overlay}")
-            info "Auto-injecting TLS overlay for OSAC backend CA cert: ${osac_tls_overlay}"
-        fi
 
         # On macOS the OCP worker nodes (192.168.30.x) are not routable via VPN and
         # the *.apps OCP wildcard DNS isn't served by the VPN's split-horizon resolvers.
@@ -436,6 +435,48 @@ validate_osac_provider() {
                 info "  (Skipping darwin-pf overlay — port-forwards not running on 8443/19443)"
             fi
         fi
+    fi
+
+    if [[ "${osac_backend_env_found}" == true ]] && [[ -z "${OSAC_CA_CERT_FILE:-}" ]]; then
+        err "OSAC backend env file does not set OSAC_CA_CERT_FILE"
+        return 1
+    fi
+
+    if [[ -n "${OSAC_CA_CERT_FILE:-}" ]]; then
+        if ! validate_osac_ca_cert "${OSAC_CA_CERT_FILE}"; then
+            return 1
+        fi
+
+        # Compose resolves relative bind-mount sources from its project directory,
+        # not this script's working directory. Normalize before passing the path on.
+        local ca_dir
+        ca_dir="$(cd "$(dirname "${OSAC_CA_CERT_FILE}")" && pwd)" || {
+            err "Cannot resolve OSAC_CA_CERT_FILE directory: ${OSAC_CA_CERT_FILE}"
+            return 1
+        }
+        OSAC_CA_CERT_FILE="${ca_dir}/$(basename "${OSAC_CA_CERT_FILE}")"
+        export OSAC_CA_CERT_FILE
+
+        local osac_tls_overlay="${REPO_ROOT}/tests/compose-osac-sp-tls.yaml"
+        if [[ ! -f "${osac_tls_overlay}" ]]; then
+            err "OSAC TLS compose overlay not found: ${osac_tls_overlay}"
+            return 1
+        fi
+
+        local overlay_present=false
+        local arg_index
+        for ((arg_index = 0; arg_index + 1 < ${#COMPOSE_EXTRA_FILE_ARGS[@]}; arg_index += 2)); do
+            if [[ "${COMPOSE_EXTRA_FILE_ARGS[${arg_index}]}" == "-f" ]] && \
+                [[ "${COMPOSE_EXTRA_FILE_ARGS[${arg_index} + 1]}" == "${osac_tls_overlay}" ]]; then
+                overlay_present=true
+                break
+            fi
+        done
+        if [[ "${overlay_present}" == false ]]; then
+            COMPOSE_EXTRA_FILE_ARGS+=("-f" "${osac_tls_overlay}")
+        fi
+        info "Using OSAC CA certificate: ${OSAC_CA_CERT_FILE}"
+        info "TLS overlay configured: ${osac_tls_overlay}"
     fi
 
     local missing=()

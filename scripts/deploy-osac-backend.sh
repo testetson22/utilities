@@ -30,7 +30,7 @@
 # Prerequisites:
 #   oc       — logged in to the target OCP cluster (run oc_login_auto first)
 #   helm     — v3.8+ for OCI registry support
-#   yq, curl, jq — standard utilities
+#   yq, curl, jq, openssl — standard utilities
 #
 # See .cursor/prompts/deploy-osac-backend.md for the full runbook.
 
@@ -42,6 +42,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 readonly REPO_ROOT
 readonly MANIFESTS_DIR="${REPO_ROOT}/tests/osac-backend"
 readonly DEPLOY_DIR="${REPO_ROOT}/deploy"
+# shellcheck source=scripts/osac-ca.sh
+source "${SCRIPT_DIR}/osac-ca.sh"
 
 # --- Defaults ----------------------------------------------------------------
 
@@ -124,6 +126,9 @@ check_tools() {
     for tool in oc helm curl jq python3; do
         command -v "${tool}" &>/dev/null || missing+=("${tool}")
     done
+    if [[ "${TEAR_DOWN}" != true ]] && ! command -v openssl &>/dev/null; then
+        missing+=(openssl)
+    fi
     # Phase 2 fixture registration needs these; skip when tearing down or
     # when --skip-phase2 is set (Phase 1-only deploy).
     if [[ "${TEAR_DOWN}" != true && "${SKIP_PHASE2}" != true ]]; then
@@ -444,6 +449,12 @@ extract_ca_cert() {
     log "Extracting CA cert from cert-manager secret"
     mkdir -p "${DEPLOY_DIR}"
 
+    local ca_file="${DEPLOY_DIR}/osac-ca.pem"
+    if [[ -e "${ca_file}" && ! -f "${ca_file}" ]]; then
+        err "OSAC CA certificate path exists but is not a regular file: ${ca_file}"
+        return 1
+    fi
+
     local retries=0
     until oc get secret osac-ca -n cert-manager &>/dev/null; do
         sleep 5
@@ -451,9 +462,24 @@ extract_ca_cert() {
         [[ ${retries} -gt 24 ]] && { err "osac-ca secret did not appear in cert-manager namespace"; exit 1; }
     done
 
-    oc get secret osac-ca -n cert-manager \
+    local ca_tmp
+    ca_tmp="$(mktemp "${DEPLOY_DIR}/.osac-ca.pem.XXXXXX")"
+    if ! oc get secret osac-ca -n cert-manager \
         -o go-template='{{ index .data "tls.crt" | base64decode }}' \
-        > "${DEPLOY_DIR}/osac-ca.pem"
+        > "${ca_tmp}"; then
+        rm -f "${ca_tmp}"
+        err "Failed to extract CA certificate from cert-manager secret osac-ca"
+        return 1
+    fi
+    if ! validate_osac_ca_cert "${ca_tmp}"; then
+        rm -f "${ca_tmp}"
+        return 1
+    fi
+    if ! chmod 644 "${ca_tmp}" || ! mv -f "${ca_tmp}" "${ca_file}"; then
+        rm -f "${ca_tmp}"
+        err "Could not install extracted CA certificate at ${ca_file}"
+        return 1
+    fi
     info "CA cert written to deploy/osac-ca.pem"
 }
 

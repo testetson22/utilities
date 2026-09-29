@@ -9,7 +9,7 @@ The OSAC SP needs a real fulfillment-service backend to test against, but acquir
 ## Prerequisites
 
 1. **OCP cluster access**: `oc` logged in with cluster-admin (run `oc_login_auto` first)
-2. **Required tools**: `helm` (3.8+, OCI registry support), `yq`, `curl`, `jq`
+2. **Required tools**: `helm` (3.8+, OCI registry support), `yq`, `curl`, `jq`, `openssl`
 3. **DCM stack tools**: same as `@deploy-dcm` (`git`, `podman`, `podman-compose`)
 
 ## Commands
@@ -174,8 +174,10 @@ was removed). If you see a TLS verification error it means the custom CA cert is
 not that TLS itself is the problem. The fix is to ensure `deploy/osac-ca.pem` is mounted and
 `SP_OSAC_TLS_CERT_FILE` + `SSL_CERT_FILE` point at it — not to disable TLS.
 
-`deploy-dcm.sh` does this automatically when `deploy/osac-backend.env` exists (it injects
-`tests/compose-osac-sp-tls.yaml`). If deploying manually, pass `--compose-file tests/compose-osac-sp-tls.yaml`.
+`deploy-dcm.sh` validates `OSAC_CA_CERT_FILE` and injects `tests/compose-osac-sp-tls.yaml`
+when the CA path is set. It fails before Compose starts if the file is missing, unreadable,
+empty, or not a valid PEM X.509 certificate. If deploying manually, pass
+`--compose-file tests/compose-osac-sp-tls.yaml` and ensure the CA path is absolute and readable.
 
 ### gRPC Route unreachable / TLS handshake failure
 ```bash

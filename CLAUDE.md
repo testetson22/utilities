@@ -228,7 +228,7 @@ the backend is a self-contained stack deployed on the edge94 OCP cluster using
 test-only credentials vendored from `dcm-project/osac-service-provider`'s own Tier B
 e2e infrastructure (`tests/osac-backend/`).
 
-**Fully turn-key (requires `oc`, `helm`, `yq` — `deploy-dcm.sh` deploys the backend for you):**
+**Fully turn-key (requires `oc`, `helm`, `yq`, `openssl` — `deploy-dcm.sh` deploys the backend for you):**
 
 ```bash
 oc_login_auto                       # log in to edge94
@@ -239,7 +239,8 @@ oc_login_auto                       # log in to edge94
 (idempotent — skips already-present cert-manager/namespace/etc. on reruns), then
 `deploy-dcm.sh` auto-detects the resulting `deploy/osac-backend.env` and wires in
 credentials plus the TLS CA overlay (`tests/compose-osac-sp-tls.yaml`) automatically —
-no manual `source` or `--compose-file` needed.
+no manual `source` or `--compose-file` needed. It validates the CA as a readable, non-empty
+PEM X.509 certificate before Compose starts.
 
 **Or as two steps (useful when reusing one backend across many stack up/down cycles):**
 

@@ -9,6 +9,8 @@ on:
     paths:
       - 'scripts/*.sh'
       - 'tests/run-e2e.sh'
+      - 'tests/test-osac-ca-validation.sh'
+      - 'tests/compose-osac-sp-tls.yaml'
       - 'providers/*.conf'
       - '.github/workflows/validate-scripts.yaml'
   workflow_dispatch:
@@ -155,6 +157,17 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "Results: ${passed} passed, ${failures} failed"
           [ "$failures" -eq 0 ] || exit 1
+
+  validate-osac-ca:
+    name: OSAC CA validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate OSAC CA certificate checks
+        run: bash tests/test-osac-ca-validation.sh
 
   validate-e2e-harness:
     name: run-e2e.sh flags
