@@ -60,6 +60,7 @@ readonly OSAC_SP_UPSTREAM_RAW="https://raw.githubusercontent.com/dcm-project/osa
 TEAR_DOWN=false
 SKIP_CERT_MANAGER=false
 SKIP_PHASE2=false
+OSAC_AAP_MODE="${OSAC_AAP_MODE:-mock}"
 
 # --- Logging -----------------------------------------------------------------
 
@@ -83,7 +84,8 @@ Options:
   --skip-phase2               Skip Phase 2 components (osac-operator, BMFO, aap-mock, fixtures)
                               Phase 2 allows clusters to advance beyond PROGRESSING; chart 0.0.18+
                               (proto-compatible with fulfillment-service 0.0.107, OSAC-2928).
-                              Full ACTIVE delivery (kubeconfig) requires Tier C (real Agents).
+                               Full ACTIVE delivery (kubeconfig) requires Tier C (real Agents).
+  --aap-mode MODE             AAP backend mode: mock (default) or real
   --help                      Show this help message
 
 Environment variables:
@@ -110,12 +112,22 @@ while [[ $# -gt 0 ]]; do
         --chart-version)       FULFILLMENT_SERVICE_CHART_VERSION="$2"; shift 2 ;;
         --skip-cert-manager)   SKIP_CERT_MANAGER=true; shift ;;
         --skip-phase2)         SKIP_PHASE2=true; shift ;;
+        --aap-mode)             OSAC_AAP_MODE="$2"; shift 2 ;;
         --help)                usage; exit 0 ;;
         *)                     err "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
 
+if [[ "${OSAC_AAP_MODE}" != "mock" && "${OSAC_AAP_MODE}" != "real" ]]; then
+    err "--aap-mode must be mock or real"
+    exit 1
+fi
+
 readonly NS="${OSAC_BACKEND_NAMESPACE}"
+
+if [[ "${TEAR_DOWN}" == true && "${OSAC_AAP_MODE}" == "real" ]]; then
+    OSAC_BACKEND_NAMESPACE="${NS}" bash "${SCRIPT_DIR}/deploy-osac-aap.sh" --tear-down
+fi
 
 # --- Tool checks -------------------------------------------------------------
 
@@ -679,6 +691,12 @@ EOF
         --values "${values_file}" \
         2>&1 | grep -Ev '^(Pulled|Digest): ' > "${rendered_file}"
 
+    # The chart sets token issuers to externalHostname:8000, but the OCP Route
+    # exposes the gRPC service on HTTPS port 443. Keep issuer and JWKS discovery
+    # on the route's actual external URL for both the server and console proxy.
+    bash "${SCRIPT_DIR}/normalize-fulfillment-token-issuer.sh" \
+        "${rendered_file}" "https://${grpc_host}"
+
     yq eval-all 'select(. != null) | select(.kind != "TLSRoute")' "${rendered_file}" \
         > "${filtered_file}"
 
@@ -688,18 +706,21 @@ EOF
     log "Waiting for fulfillment-grpc-server to be available (up to 5m)"
     oc rollout status deployment/fulfillment-grpc-server -n "${NS}" --timeout=5m
 
-    # Discover the gRPC server Service port (for the Route targetPort)
-    local grpc_port
-    grpc_port="$(oc get service fulfillment-grpc-server -n "${NS}" \
+    # The external TLS Route must target the chart's Envoy ingress service. It
+    # serves JWKS/REST and proxies gRPC, and its certificate includes grpc_host.
+    # Routing directly to fulfillment-grpc-server bypasses Envoy and presents an
+    # internal-only certificate, so external JWKS discovery fails TLS validation.
+    local external_api_port
+    external_api_port="$(oc get service fulfillment-api -n "${NS}" \
         -o jsonpath='{.spec.ports[0].name}' 2>/dev/null)"
-    if [[ -z "${grpc_port}" ]]; then
+    if [[ -z "${external_api_port}" ]]; then
         # Fallback: use port number
-        grpc_port="$(oc get service fulfillment-grpc-server -n "${NS}" \
+        external_api_port="$(oc get service fulfillment-api -n "${NS}" \
             -o jsonpath='{.spec.ports[0].port}' 2>/dev/null)"
     fi
 
-    # Create gRPC passthrough Route (HTTP/2 + TLS)
-    log "Creating gRPC OCP Route (passthrough TLS)"
+    # Create the external API/gRPC OCP Route (HTTP/2 + TLS passthrough).
+    log "Creating fulfillment API/gRPC OCP Route (passthrough TLS)"
     oc apply -n "${NS}" -f - <<EOF
 apiVersion: route.openshift.io/v1
 kind: Route
@@ -713,14 +734,17 @@ spec:
   host: ${grpc_host}
   to:
     kind: Service
-    name: fulfillment-grpc-server
+    name: fulfillment-api
   port:
-    targetPort: "${grpc_port}"
+    targetPort: "${external_api_port}"
   tls:
     termination: passthrough
 EOF
 
-    info "gRPC Route created at ${grpc_host}:443"
+    info "fulfillment API/gRPC Route created at ${grpc_host}:443"
+
+    log "Waiting for fulfillment-console-proxy JWKS initialization"
+    oc rollout status deployment/fulfillment-console-proxy -n "${NS}" --timeout=2m
 
     # Write output env file (Phase 1 complete)
     write_env_file "${keycloak_host}" "${grpc_host}"
@@ -961,6 +985,11 @@ deploy_phase2() {
     # call the gRPC endpoints directly instead.
     log "Registering hub, HostType, ClusterTemplate, and ClusterVersion with fulfillment-service"
     register_fixtures
+
+    if [[ "${OSAC_AAP_MODE}" == "real" ]]; then
+        log "Configuring disposable real AAP Gateway integration"
+        OSAC_BACKEND_NAMESPACE="${NS}" bash "${SCRIPT_DIR}/deploy-osac-aap.sh"
+    fi
 
     info "Phase 2 deployment complete — clusters will advance to PROGRESSING via osac-operator + BMFO + aap-mock"
     info "Note: full ACTIVE status (kubeconfig delivery) requires real Agents — this is Tier C territory"

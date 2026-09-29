@@ -240,7 +240,14 @@ oc_login_auto                       # log in to edge94
 `deploy-dcm.sh` auto-detects the resulting `deploy/osac-backend.env` and wires in
 credentials plus the TLS CA overlay (`tests/compose-osac-sp-tls.yaml`) automatically —
 no manual `source` or `--compose-file` needed. It validates the CA as a readable, non-empty
-PEM X.509 certificate before Compose starts.
+PEM X.509 certificate before Compose starts. On macOS, the combined command also starts or
+reuses the launchd-managed Keycloak/gRPC port-forwards before provider validation, then
+injects the Darwin routing overlay.
+
+Use `--osac-aap-mode real` with the combined command to additionally deploy the disposable
+AAP 2.7 Controller/Gateway integration, activate it from `OSAC_AAP_MANIFEST`, and configure
+the OSAC operator to use the Gateway. The default `--osac-aap-mode mock` remains available
+for fast contract tests; real mode does not remove the mock deployment.
 
 **Or as two steps (useful when reusing one backend across many stack up/down cycles):**
 
@@ -295,17 +302,18 @@ ever needs to change (e.g. secret-scanning policy), it must be coordinated with 
 
 The OCP cluster's internal service network (`192.168.30.x`) is not directly routable from a Mac.
 `make port-forward-osac` tunnels the required services via `oc port-forward`, registered as
-persistent macOS launchd agents (`com.osac.pf.keycloak`, `com.osac.pf.grpc`):
+persistent macOS launchd agents (`com.osac.pf.keycloak`, `com.osac.pf.grpc`). The combined
+deploy command starts them automatically after deploying the backend:
 
 ```bash
 oc_login_auto
-make port-forward-osac    # tunnels 8443 (Keycloak) and 19443 (gRPC) via launchd auto-restart
-./scripts/deploy-dcm.sh --environment-agent --osac-service-provider
-# deploy-dcm.sh auto-detects the port-forwards (lsof) and injects
-# tests/compose-osac-sp-darwin-pf.yaml with the correct in-cluster hostnames
+./scripts/deploy-dcm.sh --deploy-osac-backend --environment-agent --osac-service-provider
 make test-osac-sp
 make stop-port-forward-osac    # when done
 ```
+
+If the backend is already deployed separately, run `make port-forward-osac` before
+`deploy-dcm.sh --environment-agent --osac-service-provider`.
 
 Key design: Keycloak is accessed via its in-cluster hostname (`ffs-keycloak.osac-test-backend.svc.cluster.local:8443`) — this makes Keycloak issue tokens with the issuer URL that matches fulfillment-service's configured `auth.issuerUrl`. Port 8443 does not need sudo on macOS (> 1024).
 

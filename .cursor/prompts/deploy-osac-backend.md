@@ -109,24 +109,43 @@ The compose overlay `tests/compose-osac-sp-darwin-pf.yaml` is auto-injected by `
 - `GRPC_ENFORCE_ALPN_ENABLED=false` (disables strict h2 ALPN for port-forward paths)
 - `extra_hosts` resolving both hostnames to `192.168.127.254` (host.containers.internal)
 
-### Workflow
+### Turnkey Workflow
 
 ```bash
-# 1. Log into OCP (required before port-forwards work)
+# Log into OCP, then deploy the backend, start persistent macOS port-forwards,
+# and bring up DCM + environment-agent + OSAC SP in one invocation.
 oc_login_auto
+./scripts/deploy-dcm.sh --deploy-osac-backend --osac-aap-mode real \
+  --environment-agent --osac-service-provider
 
-# 2. Start port-forward launchd agents (survives terminal close)
+# Run tests
+OSAC_E2E_CLUSTER_TEMPLATE_ID=default-hcp make test-osac-sp
+```
+
+When the OSAC backend is already deployed separately, start/reuse its port-forwards
+before deploying the DCM stack:
+
+```bash
+oc_login_auto
 make port-forward-osac
-
-# 3. Deploy stack — auto-detects port-forwards and injects darwin-pf overlay
 ./scripts/deploy-dcm.sh --environment-agent --osac-service-provider
-
-# 4. Run tests
-make test-osac-sp
-
-# 5. Stop port-forwards when done
+OSAC_E2E_CLUSTER_TEMPLATE_ID=default-hcp make test-osac-sp
+# Stop the launchd-managed port-forwards when finished.
 make stop-port-forward-osac
 ```
+
+With `--deploy-osac-backend` on macOS, `deploy-dcm.sh` starts the launchd-managed
+port-forwards after the backend is ready and before validating/starting the OSAC SP.
+It then detects the listeners and injects both the Darwin routing overlay and the OSAC CA
+mount. The console-proxy and gRPC server token issuer is normalized to the gRPC Route's
+HTTPS endpoint (port 443), rather than the chart's in-cluster service port 8000.
+
+The default `--osac-aap-mode mock` keeps the disposable Tier B mock and is the fast
+contract-test path. `--osac-aap-mode real` additionally deploys the disposable AAP 2.7
+Controller/Gateway integration, activates it from `OSAC_AAP_MANIFEST` (default:
+`tests/manifest.zip`), creates the OSAC no-op template, and points the operator at the
+Gateway-backed Controller API. The mock is not removed in real mode; switching the mode
+only changes which AAP endpoint the operator uses.
 
 ### Key networking details
 - Port 8443 > 1024 — no sudo required on macOS
@@ -138,7 +157,7 @@ make stop-port-forward-osac
 
 - `--deploy-osac-backend` is opt-in and heavy on first run (cert-manager install + Postgres/Keycloak/fulfillment-service rollout — a few minutes), matching the existing `--deploy-acm`/`--deploy-mce`/`--deploy-cnv` pattern. Reruns are fast (idempotent — skips already-present resources)
 - `deploy-dcm.sh --tear-down` never removes the backend unless `--deploy-osac-backend` is also passed on that same invocation
-- Phase 2 components (`osac-operator`, BMFO, `osac-aap-mock` — full provisioning lifecycle / routed dispatch) are **not** deployed here; that coverage is intentionally left to `dcm-project/osac-service-provider`'s own Tier B CI, not this repo
+- The backend deploys the Phase 2 Tier B++ components (`osac-operator`, BMFO, `osac-aap-mock`, and fixtures) by default. It does not provide real Agents, AAP execution, or physical provisioning; those remain Tier C prerequisites.
 - `OSAC_E2E_CLUSTER_TEMPLATE_ID` / `OSAC_E2E_VM_TEMPLATE_ID` are not auto-discovered — obtain them from the fulfillment-service admin API/CLI against this backend and export them before running full CRUD tests
 - Full CRUD dispatch requires the `osac-service-provider:main` image to have real Create/Get support implemented — check [FLPATH-4459](https://redhat.atlassian.net/browse/FLPATH-4459) if CRUD tests fail unexpectedly against `:main`
 - The fulfillment-service backend does not enforce `max_page_size > 100` per AEP-132; the corresponding E2E test skips gracefully when the backend is reachable and returns 200

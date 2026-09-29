@@ -30,18 +30,44 @@ set -euo pipefail
 
 NAMESPACE="${OSAC_BACKEND_NAMESPACE:-osac-test-backend}"
 STOP=false
+ENSURE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --namespace) NAMESPACE="$2"; shift 2 ;;
         --stop)      STOP=true; shift ;;
+        --ensure)    ENSURE=true; shift ;;
+        --help)
+            echo "Usage: $0 [--namespace <ns>] [--ensure] [--stop]"
+            exit 0
+            ;;
         *)
             echo "Unknown argument: $1" >&2
-            echo "Usage: $0 [--namespace <ns>] [--stop]" >&2
+            echo "Usage: $0 [--namespace <ns>] [--ensure] [--stop]" >&2
             exit 1
             ;;
     esac
 done
+
+if [[ "${STOP}" == true && "${ENSURE}" == true ]]; then
+    echo "--ensure and --stop cannot be used together" >&2
+    exit 2
+fi
+
+port_listening() {
+    local port="$1"
+    command -v lsof >/dev/null 2>&1 || return 1
+    lsof -nP -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null | grep -q .
+}
+
+wait_for_port() {
+    local port="$1"
+    for ((attempt = 0; attempt < 10; attempt++)); do
+        port_listening "${port}" && return 0
+        sleep 1
+    done
+    return 1
+}
 
 # ── Stop path ───────────────────────────────────────────────────────────────
 
@@ -63,6 +89,11 @@ if [[ "${STOP}" == true ]]; then
         fi
     done
     echo "[$(date -u '+%H:%M:%S')] OSAC port-forwards stopped (launchd agents removed)"
+    exit 0
+fi
+
+if [[ "${ENSURE}" == true ]] && port_listening 8443 && port_listening 19443; then
+    echo "[$(date -u '+%H:%M:%S')] OSAC port-forwards already listening (8443, 19443)"
     exit 0
 fi
 
@@ -119,6 +150,15 @@ launchctl list com.osac.pf.keycloak 2>/dev/null \
     | awk -F'"' '/"PID"/{print $4}' > /tmp/pf-ffs-keycloak.pid || true
 launchctl list com.osac.pf.grpc 2>/dev/null \
     | awk -F'"' '/"PID"/{print $4}' > /tmp/pf-fulfillment-grpc-server.pid || true
+
+if ! wait_for_port 8443; then
+    echo "ERROR: Keycloak port-forward failed to listen on 8443; inspect /tmp/pf-ffs-keycloak.log" >&2
+    exit 1
+fi
+if ! wait_for_port 19443; then
+    echo "ERROR: fulfillment gRPC port-forward failed to listen on 19443; inspect /tmp/pf-fulfillment-grpc-server.log" >&2
+    exit 1
+fi
 
 echo "[$(date -u '+%H:%M:%S')] OSAC port-forward launchd agents registered:"
 echo "  com.osac.pf.keycloak  → 127.0.0.1:8443  → svc/ffs-keycloak:8443"

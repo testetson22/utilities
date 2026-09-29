@@ -140,7 +140,11 @@ EOF
   --deploy-cnv                   Deploy OpenShift Virtualization (CNV) on the cluster before starting the stack (opt-in, heavy)
   --deploy-osac-backend          Deploy the self-contained OSAC fulfillment-service backend before
                                   starting the stack (opt-in, heavy; see scripts/deploy-osac-backend.sh).
+                                  On macOS with --osac-service-provider, also starts the required
+                                  launchd-managed backend port-forwards automatically.
                                   With --tear-down, also removes the OSAC backend namespace.
+  --osac-aap-mode MODE           Select OSAC operator AAP backend: mock (default) or real.
+                                  real deploys the disposable AAP Gateway integration.
   --acm-cluster-sp-repo URL      Git repo for acm-cluster-service-provider (default: ${DEFAULT_ACM_CLUSTER_SP_REPO})
   --acm-cluster-sp-branch REF    Branch to clone (default: ${DEFAULT_ACM_CLUSTER_SP_BRANCH})
   --kubeconfig PATH              Path to kubeconfig file (auto-detected if omitted)
@@ -409,7 +413,8 @@ validate_osac_provider() {
         # the *.apps OCP wildcard DNS isn't served by the VPN's split-horizon resolvers.
         # Auto-inject the Darwin port-forward overlay when both conditions are met:
         #   1. Running on Darwin
-        #   2. The port-forwards are already listening on 18443/19443 (start them via
+        #   2. The port-forwards are already listening on 8443/19443 (started automatically
+        #      with --deploy-osac-backend or via
         #      `make port-forward-osac` or manually before deploying)
         local darwin_pf_overlay="${REPO_ROOT}/tests/compose-osac-sp-darwin-pf.yaml"
         if [[ "$(uname -s)" == "Darwin" ]] && [[ -f "${darwin_pf_overlay}" ]]; then
@@ -511,6 +516,31 @@ validate_osac_provider() {
         err "Add --environment-agent to your deploy command."
         return 1
     fi
+}
+
+ensure_osac_port_forwards() {
+    [[ "$(uname -s)" == "Darwin" ]] || return 0
+
+    local osac_provider_enabled=false
+    local i
+    for i in $(seq 0 $((PROV_COUNT - 1))); do
+        if [[ "${PROV_FLAGS[$i]}" == "osac-service-provider" ]] && \
+           [[ "${PROV_ENABLED[$i]}" == true ]]; then
+            osac_provider_enabled=true
+            break
+        fi
+    done
+    [[ "${osac_provider_enabled}" == true ]] || return 0
+
+    if [[ -z "${DCM_KUBECONFIG:-}" ]]; then
+        err "Cannot start OSAC port-forwards without a resolved kubeconfig"
+        return 1
+    fi
+
+    log "Ensuring OSAC backend port-forwards for macOS"
+    KUBECONFIG="${DCM_KUBECONFIG}" \
+        OSAC_BACKEND_NAMESPACE="${OSAC_BACKEND_NAMESPACE:-osac-test-backend}" \
+        bash "${REPO_ROOT}/scripts/osac-port-forward.sh" --ensure
 }
 
 # --- Cluster authentication ------------------------------------------------ #
@@ -893,6 +923,7 @@ CLEANUP_ON_FAILURE=false
 DEPLOY_ACM_MCE=""
 DEPLOY_CNV=false
 DEPLOY_OSAC_BACKEND=false
+OSAC_AAP_MODE="${OSAC_AAP_MODE:-mock}"
 GITOPS_ENABLED=false
 ACM_CLUSTER_SP_REPO="${DEFAULT_ACM_CLUSTER_SP_REPO}"
 ACM_CLUSTER_SP_BRANCH="${DEFAULT_ACM_CLUSTER_SP_BRANCH}"
@@ -959,6 +990,9 @@ while [[ $# -gt 0 ]]; do
             DEPLOY_CNV=true; shift ;;
         --deploy-osac-backend)
             DEPLOY_OSAC_BACKEND=true; shift ;;
+        --osac-aap-mode)
+            [[ "$2" == "mock" || "$2" == "real" ]] || { err "--osac-aap-mode must be mock or real"; exit 1; }
+            OSAC_AAP_MODE="$2"; shift 2 ;;
         --deploy-acm)
             [[ -n "${DEPLOY_ACM_MCE}" ]] && { err "--deploy-acm and --deploy-mce are mutually exclusive"; exit 1; }
             DEPLOY_ACM_MCE="acm"; shift ;;
@@ -1077,6 +1111,10 @@ if [[ "${TEAR_DOWN}" == true ]]; then
     if [[ "${DEPLOY_OSAC_BACKEND}" == true ]]; then
         log "Tearing down OSAC backend (--deploy-osac-backend + --tear-down)"
         resolve_kubeconfig || exit 1
+        if [[ "${OSAC_AAP_MODE}" == "real" ]]; then
+            OSAC_BACKEND_NAMESPACE="${OSAC_BACKEND_NAMESPACE:-osac-test-backend}" \
+                bash "${REPO_ROOT}/scripts/deploy-osac-aap.sh" --tear-down
+        fi
         KUBECONFIG="${DCM_KUBECONFIG}" bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh" --tear-down
     fi
 
@@ -1119,7 +1157,9 @@ fi
 # them at compose bring-up, not at runtime like the ACM cluster SP does.
 if [[ "${DEPLOY_OSAC_BACKEND}" == true ]]; then
     log "Deploying OSAC backend on the cluster (idempotent — skips already-present resources)"
-    KUBECONFIG="${DCM_KUBECONFIG}" bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh"
+    KUBECONFIG="${DCM_KUBECONFIG}" \
+        bash "${REPO_ROOT}/scripts/deploy-osac-backend.sh" --aap-mode "${OSAC_AAP_MODE}"
+    ensure_osac_port_forwards || exit 1
 fi
 
 # Validate and export env vars for each enabled provider

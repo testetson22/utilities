@@ -10,6 +10,7 @@ on:
       - 'scripts/*.sh'
       - 'tests/run-e2e.sh'
       - 'tests/test-osac-ca-validation.sh'
+      - 'tests/test-osac-deploy-wiring.sh'
       - 'tests/compose-osac-sp-tls.yaml'
       - 'providers/*.conf'
       - '.github/workflows/validate-scripts.yaml'
@@ -168,6 +169,24 @@ jobs:
 
       - name: Validate OSAC CA certificate checks
         run: bash tests/test-osac-ca-validation.sh
+
+  validate-osac-deploy-wiring:
+    name: OSAC turnkey deploy wiring
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install yq
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/yq" \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          chmod +x "$RUNNER_TEMP/yq"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Validate OSAC issuer normalization and single-command wiring
+        run: bash tests/test-osac-deploy-wiring.sh
 
   validate-e2e-harness:
     name: run-e2e.sh flags
