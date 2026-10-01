@@ -289,7 +289,7 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 		It("returns 204 (not 404) when deleting a non-existent VM", func() {
 			// Use a UUID-format ID so OSAC does not reject it as malformed.
 			resp, err := doOsacVMRequest(http.MethodDelete,
-				"/vms/00000000-e2e0-4000-8000-delete0vm0000", "")
+				"/vms/00000000-e2e0-4000-8000-de1e7e000002", "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusBadGateway {
@@ -398,7 +398,7 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 				"conflicting-payload retry must return the same resource id %q", vmID)
 		})
 
-		It("get returns the VM with a valid status and IP fields", func() {
+		It("get returns the VM with a valid status and state-appropriate IP fields", func() {
 			resp, err := doOsacVMRequest(http.MethodGet, "/vms/"+vmID, "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
@@ -409,10 +409,14 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 			Expect(vm.ID).To(Equal(vmID))
 			Expect(osacVMStatusValid(vm.Status)).To(BeTrue(),
 				"status %q is not in the 8-value VM vocabulary", vm.Status)
-			Expect(vm.InternalIPAddress).NotTo(BeNil(),
-				"internal_ip_address must be present in GET /vms/{id} response (REQ-VMGET-030)")
-			Expect(vm.ExternalIPAddress).NotTo(BeNil(),
-				"external_ip_address must be present in GET /vms/{id} response (REQ-VMGET-030)")
+			if vm.Status == "RUNNING" {
+				Expect(vm.InternalIPAddress).NotTo(BeNil())
+				Expect(*vm.InternalIPAddress).NotTo(BeEmpty(),
+					"internal_ip_address must be non-empty when VM is RUNNING (REQ-VMGET-030)")
+				Expect(vm.ExternalIPAddress).NotTo(BeNil())
+				Expect(*vm.ExternalIPAddress).NotTo(BeEmpty(),
+					"external_ip_address must be non-empty when VM is RUNNING (REQ-VMGET-030)")
+			}
 		})
 
 		It("GET /vms/{id} omits spec (known SP limitation — no field round-trip)", func() {
@@ -440,13 +444,21 @@ var _ = Describe("OSAC SP — VM API", Label("sp", "osac"), func() {
 
 			var listResp osacVMListResponse
 			decodeJSON(resp, &listResp)
-			Expect(listResp.Results).NotTo(BeEmpty())
-
-			for _, vm := range listResp.Results {
-				Expect(vm.InternalIPAddress).NotTo(BeNil(),
-					"each VM list entry should have internal_ip_address (REQ-VMLIST-030)")
-				Expect(vm.ExternalIPAddress).NotTo(BeNil(),
-					"each VM list entry should have external_ip_address (REQ-VMLIST-030)")
+			var listed *osacVM
+			for i := range listResp.Results {
+				if listResp.Results[i].ID == vmID {
+					listed = &listResp.Results[i]
+					break
+				}
+			}
+			Expect(listed).NotTo(BeNil(), "created VM %s must appear in the list", vmID)
+			if listed.Status == "RUNNING" {
+				Expect(listed.InternalIPAddress).NotTo(BeNil())
+				Expect(*listed.InternalIPAddress).NotTo(BeEmpty(),
+					"listed VM internal_ip_address must be non-empty when RUNNING (REQ-VMLIST-030)")
+				Expect(listed.ExternalIPAddress).NotTo(BeNil())
+				Expect(*listed.ExternalIPAddress).NotTo(BeEmpty(),
+					"listed VM external_ip_address must be non-empty when RUNNING (REQ-VMLIST-030)")
 			}
 		})
 

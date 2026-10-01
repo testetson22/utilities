@@ -197,6 +197,40 @@ of real infrastructure. Moving from Kind/Tier B to OCP is meaningful for deploym
 RBAC, TLS, namespace, CRD, service-network, and controller-initialization failures, but
 does not substitute for Tier C lifecycle coverage.
 
+### Deterministic SP Contract Simulator
+
+The utilities repo provides an opt-in `--osac-fulfillment-mode simulator` deployment
+mode. It builds the maintained upstream `osac-mock-provider` contract fixture in
+`tests/osac-simulator`, including real TLS, OIDC discovery/token exchange, public OSAC
+gRPC services, caller-ID idempotency, ready-state CRUD, template resolution, and
+kubeconfig Secret behavior. This mode is intended for SP-owned translation and response
+contract tests; it does not simulate AAP, Agents, BMFO, Ironic, BMCs, HostedClusters, or
+network controllers.
+
+The simulator supports scenario selection through `SIMULATOR_SCENARIO`:
+
+| Scenario | Controlled result |
+|----------|-------------------|
+| `ready` (default) | Upstream deterministic ready-state CRUD behavior |
+| `failed` | Cluster/VM Get/List states become `FAILED` |
+| `backend-unavailable` | Get polling returns gRPC `Unavailable` |
+| `backend-timeout` | Get polling returns gRPC `DeadlineExceeded` |
+| `delete-delayed` | Delete acknowledges, then Get remains visible for a configured number of polls before `NotFound` |
+| `vm-running` | VM Get/List state is `RUNNING` with deterministic internal/external IPs |
+
+`SIMULATOR_DELETE_AFTER` controls delayed-delete polling (default `2`). The remaining
+SP cases for failure, ACTIVE plus kubeconfig, and failure/deletion CloudEvents should now
+be enabled against these scenarios; they must not depend on real backend timing or
+infrastructure.
+
+An optional `tests/osac-controller-simulator` watches real fulfillment-service-created
+`ClusterOrder` and `ComputeInstance` resources and patches deterministic status/condition
+data for downstream diagnostic experiments. It is deliberately not an SP state driver:
+the fulfillment-service public Update API does not provide external status injection, so
+SP status/error scenarios use the deterministic fulfillment-service simulator instead.
+The controller simulator does not create Agents, BMIs, BMHs, AAP jobs, kubevirt resources,
+or networks. Its Kubernetes manifest is not included in the default backend deployment.
+
 **Preconditions:** explicitly opt in to the Phase 2 backend (do not use `--skip-phase2`);
 confirm the operator and BMFO are running, the intended ClusterTemplate/HostType/Hub
 fixtures are registered, and the mock and BMH fixtures are present. Use a dedicated
@@ -272,8 +306,9 @@ Tier C `TC-TC-*` IDs for these intermediate tests.
 
 1. **Dispatch gate:** TBP-010/020/030 pass reproducibly in Phase 2; publish the
    observed stop condition and traceable object IDs. This validates SP submission and
-   the *reachable* control-plane path, not allocation. Current evidence is TBP-010/020
-   pass and TBP-030 fail due to the missing ClusterOrder status condition.
+   the *reachable* control-plane path, not allocation. Current real-AAP evidence is
+   TBP-010/020/030 passing, with the order reaching `Progressing/PreparingInfrastructure`
+   and stopping because no Agent/BMI/HostedCluster exists.
 2. **Allocation gate:** provision suitable test Agents or a contract-faithful simulator
    **only after** determining what the operator actually requires. Enable TBP-040/050
    only when their path is reachable and the host assignment/job can be correlated.
@@ -419,10 +454,10 @@ All poll-based assertions should use `Eventually` with a polling interval of **3
 
 ## Running Tier C Tests
 
-**Note:** The `make test-osac-sp` target runs the **existing** Tier A/B OSAC SP E2E tests
+**Note:** The `make test-osac-sp` target runs the **existing** Tier A/B OSAC SP contract E2E tests
 (input validation, API lifecycle, NATS events). The opt-in `tier-b-dispatch` diagnostic
 Tier B++ implementation (currently TBP-010–030; TBP-040–060 remain discovery-gated) is not
-included by the default `osac` label unless the `tier-b-dispatch` label is selected.
+included by the default target; run it explicitly with `make test-osac-dispatch`.
 The Tier C provisioning-lifecycle tests
 described in this plan (TC-TC-100 through TC-TC-405) are **not yet implemented** in Go
 test code. Today, `make test-osac-sp` can validate connectivity and API contract against
@@ -502,7 +537,7 @@ To run Tier C in CI the following would be required:
 | DD-010 | Health always returns HTTP 200; detail absent when healthy, present when degraded | TC-TC-010, TC-TC-300 (detail on FAILED) |
 | DD-080 / REQ-DELETE-020 | OSAC SP tolerates NotFound from backend on DELETE | TC-TC-155 (implicitly, after DELETED state) |
 | TBD | AAP job template invocation via fulfillment-service | TC-TC-040, TC-TC-100, TC-TC-200 |
-| TBD | SP → ClusterOrder dispatch and prerequisite/stop condition without hardware | Tier B++ diagnostic TBP-010/020/030 implementation; TBP-010/020 pass in the tested Phase 2 environment, while TBP-030 currently fails because no linked ClusterOrder status condition is emitted; extends into TC-TC-100/105 |
+| TBD | SP → ClusterOrder dispatch and prerequisite/stop condition without hardware | Tier B++ diagnostic TBP-010/020/030 implementation; all three pass in the tested real-AAP Phase 2 environment and stop at `Progressing/PreparingInfrastructure` without Agents; extends into TC-TC-100/105 |
 | TBD | Linked simulated host allocation / mock AAP dispatch, if reachable with suitable Agents | Proposed TBP-040/050 (not enabled until discovery); real allocation in TC-TC-110/115 and real AAP in TC-TC-040 |
 | TBD | BMFO BareMetalInstance lifecycle | TC-TC-110, TC-TC-115 |
 | TBD | Real network/IP allocation for VMs | TC-TC-210, TC-TC-215 |

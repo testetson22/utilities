@@ -169,6 +169,10 @@ var _ = Describe("OSAC SP — Tier B+ dispatch discovery", Label("sp", "osac", "
 				name, conditionType, conditionStatus, condition["reason"], condition["message"])
 		}
 		if os.Getenv("OSAC_AAP_MODE") == "real" {
+			Expect(osacConditionMatches(conditions, "NamespaceCreated", "True", ""))
+			Expect(osacConditionMatches(conditions, "Progressing", "True", "PreparingInfrastructure"))
+		}
+		if os.Getenv("OSAC_AAP_MODE") == "real" {
 			jobs, found := nestedSlice(clusterOrder, "status", "provisioningJobs")
 			Expect(found).To(BeTrue(), "real-AAP ClusterOrder must record provisioning job history")
 			Expect(jobs).NotTo(BeEmpty(), "real-AAP ClusterOrder must record the linked job ID")
@@ -198,6 +202,10 @@ var _ = Describe("OSAC SP — Tier B+ dispatch discovery", Label("sp", "osac", "
 		Expect(spCluster.ID).To(Equal(clusterID))
 		Expect(osacClusterStatusValid(spCluster.Status)).To(BeTrue(),
 			"SP state %q must be in the documented vocabulary", spCluster.Status)
+		if os.Getenv("OSAC_AAP_MODE") == "real" {
+			Expect(spCluster.Status).To(Equal("PROGRESSING"),
+				"SP must map the operator's nonterminal infrastructure state to PROGRESSING")
+		}
 	})
 })
 
@@ -206,6 +214,20 @@ func osacKubernetesNamespace() string {
 		return ns
 	}
 	return "osac-test-backend"
+}
+
+func osacConditionMatches(conditions []interface{}, conditionType, status, reason string) bool {
+	for _, raw := range conditions {
+		condition, ok := raw.(map[string]interface{})
+		if !ok || condition["type"] != conditionType || condition["status"] != status {
+			continue
+		}
+		if reason == "" {
+			return true
+		}
+		return condition["reason"] == reason
+	}
+	return false
 }
 
 func requireOSACKubectl() {

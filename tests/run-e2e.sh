@@ -48,6 +48,8 @@ Service provider flags (forwarded to deploy-dcm.sh):
   --acm-cluster-service-provider    Enable the ACM cluster SP
   --environment-agent               Enable the environment agent (required for OSAC SP)
   --osac-service-provider           Enable the OSAC SP (requires --environment-agent and OSAC credentials)
+  --osac-aap-mode MODE              Select OSAC AAP backend: mock (default) or real
+  --osac-fulfillment-mode MODE      Select OSAC fulfillment backend: real (default) or simulator
   --deploy-acm                      Deploy ACM on the cluster (opt-in, heavy)
   --deploy-mce                      Deploy MCE on the cluster (opt-in, heavy)
   --kubeconfig PATH                 Path to kubeconfig file
@@ -169,6 +171,8 @@ ENABLE_CONTAINER_SP=false
 ENABLE_ACM_CLUSTER_SP=false
 ENABLE_KUBEVIRT_SP=false
 KUBEVIRT_VM_NS_ARG=""
+OSAC_AAP_MODE="${OSAC_AAP_MODE:-mock}"
+OSAC_FULFILLMENT_MODE="${OSAC_FULFILLMENT_MODE:-real}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -229,6 +233,16 @@ while [[ $# -gt 0 ]]; do
         --osac-service-provider)
             DEPLOY_ARGS+=("$1")
             shift ;;
+        --osac-aap-mode)
+            [[ "$2" == "mock" || "$2" == "real" ]] || { err "--osac-aap-mode must be mock or real"; exit 1; }
+            OSAC_AAP_MODE="$2"
+            DEPLOY_ARGS+=("$1" "$2")
+            shift 2 ;;
+        --osac-fulfillment-mode)
+            [[ "$2" == "real" || "$2" == "simulator" ]] || { err "--osac-fulfillment-mode must be real or simulator"; exit 1; }
+            OSAC_FULFILLMENT_MODE="$2"
+            DEPLOY_ARGS+=("$1" "$2")
+            shift 2 ;;
         --deploy-acm|--deploy-mce)
             DEPLOY_ARGS+=("$1")
             shift ;;
@@ -279,6 +293,11 @@ if [[ -n "${GATEWAY_URL}" ]]; then
     export DCM_GATEWAY_URL="${GATEWAY_URL}"
     info "DCM_GATEWAY_URL=${GATEWAY_URL}"
 fi
+
+export OSAC_AAP_MODE
+info "OSAC_AAP_MODE=${OSAC_AAP_MODE}"
+export OSAC_FULFILLMENT_MODE
+info "OSAC_FULFILLMENT_MODE=${OSAC_FULFILLMENT_MODE}"
 
 # Export SP URLs when providers are enabled.
 if [[ "${ENABLE_CONTAINER_SP}" == "true" ]] || [[ "${ENABLE_ACM_CLUSTER_SP}" == "true" ]]; then

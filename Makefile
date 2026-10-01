@@ -51,8 +51,11 @@ test-acm-sp: ## Run ACM cluster SP tests only
 test-kubevirt-sp: ## Run KubeVirt SP tests only (KubeVirt cluster required)
 	cd tests/e2e && $(GINKGO_BASE) --label-filter=kubevirt .
 
-test-osac-sp: ## Run OSAC SP tests only (--environment-agent --osac-service-provider required)
-	cd tests/e2e && $(GINKGO_BASE) --label-filter=osac .
+test-osac-sp: ## Run OSAC SP contract tests only (--environment-agent --osac-service-provider required)
+	cd tests/e2e && $(GINKGO_BASE) --label-filter='osac && !tier-b-dispatch' .
+
+test-osac-dispatch: ## Run opt-in OSAC Tier B++ dispatch tests
+	cd tests/e2e && $(GINKGO_BASE) --label-filter='osac && tier-b-dispatch' .
 
 test-core: ## Run core platform tests (full control plane provisioning flow)
 	cd tests/e2e && $(GINKGO_BASE) --label-filter=core .

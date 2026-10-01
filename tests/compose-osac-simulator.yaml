@@ -1,0 +1,18 @@
+services:
+  osac-mock-provider:
+    image: ${OSAC_SIMULATOR_IMAGE:-osac-fulfillment-simulator:local}
+    environment:
+      MOCK_GRPC_ADDRESS: ":9090"
+      MOCK_OIDC_ADDRESS: ":9091"
+      SIMULATOR_SCENARIO: ${SIMULATOR_SCENARIO:-ready}
+      SIMULATOR_DELETE_AFTER: ${SIMULATOR_DELETE_AFTER:-2}
+
+  osac-service-provider:
+    environment:
+      SP_OSAC_FULFILLMENT_ADDRESS: osac-mock-provider:9090
+      SP_OSAC_OIDC_ISSUER_URL: http://osac-mock-provider:9091
+      SP_OSAC_OIDC_CLIENT_ID: simulator
+      SP_OSAC_OIDC_CLIENT_SECRET: simulator
+      SP_OSAC_TLS_CERT_FILE: /etc/osac-simulator/tls-cert.pem
+    volumes:
+      - ${OSAC_SIMULATOR_CERT_FILE:-./tests/osac-simulator/tls-cert.pem}:/etc/osac-simulator/tls-cert.pem:ro

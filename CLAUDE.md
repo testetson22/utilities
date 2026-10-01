@@ -189,7 +189,8 @@ make test-smoke            # Run smoke tests only (health checks + CLI version)
 make test-cli              # Run CLI tests only
 make test-sp               # Run container SP tests (SP must be deployed)
 make test-acm-sp           # Run ACM cluster SP tests (ACM SP must be deployed)
-make test-osac-sp          # Run OSAC SP tests (--environment-agent --osac-service-provider required)
+make test-osac-sp          # Run OSAC SP contract tests (--environment-agent --osac-service-provider required)
+make test-osac-dispatch    # Run opt-in OCP-backed Tier B++ dispatch tests
 make test-core             # Run core platform tests (full control plane provisioning flow)
 make test-rehydration      # Run all rehydration tests (multi-provider + podman required)
 make test-rehydration-safe # Run non-disruptive rehydration tests only
@@ -263,6 +264,11 @@ make deploy-osac-backend            # one-time: deploys Postgres + Keycloak + fu
 ```bash
 # Validation-only (no real backend needed — always runs):
 make test-osac-sp
+make test-osac-dispatch     # opt-in Tier B++ dispatch boundary
+
+# Use the deterministic fulfillment-service simulator instead of a live backend.
+./scripts/deploy-dcm.sh --osac-fulfillment-mode simulator \
+  --environment-agent --osac-service-provider
 
 # Full CRUD + NATS (requires backend + template IDs):
 OSAC_E2E_CLUSTER_TEMPLATE_ID=<id> \

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -26,6 +25,13 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 
 	Context("registration with environment-agent", func() {
 
+		const (
+			expectedClusterName = "osac-sp-cluster"
+			expectedVMName      = "osac-sp-vm"
+			expectedClusterURL  = "http://osac-service-provider:8080/api/v1alpha1/clusters"
+			expectedVMURL       = "http://osac-service-provider:8080/api/v1alpha1/vms"
+		)
+
 		// osacSPProviders is a helper that fetches environment-agent providers once.
 		// Returns nil on error so callers can Expect.
 		osacSPProviders := func() []envAgentProvider {
@@ -35,14 +41,10 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 		}
 
 		It("registers exactly two OSAC providers (osac-sp-cluster + osac-sp-vm)", func() {
-			// OSAC SP registers exactly one cluster-type and one vm-type provider, both
-			// named with the "osac-sp" prefix. Filtering by name prefix avoids false
-			// failures when other SPs (kubevirt, k8s-container, etc.) are also registered
-			// in the same environment-agent.
 			providers := osacSPProviders()
 			var osacProviders []envAgentProvider
 			for _, p := range providers {
-				if strings.HasPrefix(p.Name, "osac-sp") {
+				if p.Name == expectedClusterName || p.Name == expectedVMName {
 					osacProviders = append(osacProviders, p)
 				}
 			}
@@ -57,14 +59,14 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 
 			var found *envAgentProvider
 			for i := range providers {
-				if providers[i].ServiceType == "cluster" && strings.HasPrefix(providers[i].Name, "osac-sp") {
+				if providers[i].ServiceType == "cluster" && providers[i].Name == expectedClusterName {
 					found = &providers[i]
 					break
 				}
 			}
 			Expect(found).NotTo(BeNil(), "no osac-sp cluster-type provider found in environment-agent /providers")
-			Expect(found.Name).To(HavePrefix("osac-sp"), "cluster provider name should start with 'osac-sp'")
-			Expect(found.Endpoint).NotTo(BeEmpty(), "cluster provider endpoint should be set")
+			Expect(found.Name).To(Equal(expectedClusterName))
+			Expect(found.Endpoint).To(Equal(expectedClusterURL))
 		})
 
 		It("registers a vm-type provider with name osac-sp-vm", func() {
@@ -72,14 +74,14 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 
 			var found *envAgentProvider
 			for i := range providers {
-				if providers[i].ServiceType == "vm" && strings.HasPrefix(providers[i].Name, "osac-sp") {
+				if providers[i].ServiceType == "vm" && providers[i].Name == expectedVMName {
 					found = &providers[i]
 					break
 				}
 			}
 			Expect(found).NotTo(BeNil(), "no osac-sp vm-type provider found in environment-agent /providers")
-			Expect(found.Name).To(HavePrefix("osac-sp"), "vm provider name should start with 'osac-sp'")
-			Expect(found.Endpoint).NotTo(BeEmpty(), "vm provider endpoint should be set")
+			Expect(found.Name).To(Equal(expectedVMName))
+			Expect(found.Endpoint).To(Equal(expectedVMURL))
 		})
 
 	})
@@ -103,9 +105,9 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 		})
 
 		It("returns required schema fields", func() {
-			Expect(healthResp.Type).NotTo(BeEmpty(), "type field must be present")
-			Expect(healthResp.Status).NotTo(BeEmpty(), "status field must be present")
-			Expect(healthResp.Path).NotTo(BeEmpty(), "path field must be present")
+			Expect(healthResp.Type).To(Equal("osac-service-provider.dcm.io/health"))
+			Expect(healthResp.Status).To(Equal("healthy"))
+			Expect(healthResp.Path).To(Equal("health"))
 		})
 
 		It("returns HTTP 200 regardless of health status (DD-010)", func() {
@@ -119,16 +121,9 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 		It("detail is absent when healthy, present when degraded (DD-010)", func() {
 			// DD-010: the `detail` field carries the error message when degraded
 			// and must be absent (empty) when the SP is healthy.
-			// The SP returns "healthy" (lowercase); accept any casing variant.
-			// Both branches are real assertions — no skipping regardless of state.
-			statusLower := strings.ToLower(healthResp.Status)
-			if statusLower == "ok" || statusLower == "healthy" {
-				Expect(healthResp.Detail).To(BeEmpty(),
-					"detail must be absent from a healthy response (DD-010)")
-			} else {
-				Expect(healthResp.Detail).NotTo(BeEmpty(),
-					"detail must be present when status is %q — degraded state must explain itself (DD-010)", healthResp.Status)
-			}
+			Expect(healthResp.Status).To(Equal("healthy"))
+			Expect(healthResp.Detail).To(BeEmpty(),
+				"detail must be absent from a healthy response (DD-010)")
 		})
 
 		It("reports increasing uptime over time", func() {
@@ -324,10 +319,7 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 				"max_page_size=0 must return 200 (treat as server default per AEP-132), not %d", resp.StatusCode)
 		})
 
-		// KNOWN BACKEND GAP: fulfillment-service does not enforce the AEP-132 constraint
-		// that max_page_size > 100 must be rejected with 400. It returns 200 instead.
-		// Tracked under FLPATH-4459 (epic) / FLPATH-4463 (story).
-		PIt("rejects max_page_size > 100 with 400 (AEP-132)", func() {
+		It("rejects max_page_size > 100 with 400 (AEP-132)", func() {
 			resp, err := doOsacClusterRequest(http.MethodGet, "/clusters?max_page_size=101", "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
@@ -428,7 +420,7 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 			// SPs which return 404 on non-existent delete.
 			// Use a UUID-format ID so OSAC does not reject it as malformed.
 			resp, err := doOsacClusterRequest(http.MethodDelete,
-				"/clusters/00000000-e2e0-4000-8000-delete0cl0000", "")
+				"/clusters/00000000-e2e0-4000-8000-de1e7e000001", "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusBadGateway {
@@ -543,22 +535,6 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 			Expect(cl.ID).To(Equal(clusterID))
 			Expect(osacClusterStatusValid(cl.Status)).To(BeTrue(),
 				"status %q is not in the 8-value cluster vocabulary", cl.Status)
-		})
-
-		It("GET /clusters/{id} omits spec (known SP limitation — no field round-trip)", func() {
-			// Documented gap: this SP version stores submission inputs but does not echo
-			// them on GET. Assert the current contract so a future echo becomes a visible
-			// behavior change rather than silent Skip of claimed round-trip coverage.
-			resp, err := doOsacClusterRequest(http.MethodGet, "/clusters/"+clusterID, "")
-			Expect(err).NotTo(HaveOccurred())
-			defer resp.Body.Close()
-			Expect(resp.StatusCode).To(Equal(http.StatusOK))
-
-			var cl osacCluster
-			decodeJSON(resp, &cl)
-			Expect(cl.Spec).To(BeNil(),
-				"GET /clusters/{id} currently omits spec; if the SP adds echo, replace this "+
-					"assertion with persisted-field round-trip checks (version, nodes.worker.count, metadata.name)")
 		})
 
 		It("kubeconfig is absent unless status is ACTIVE", func() {

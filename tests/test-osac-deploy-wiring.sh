@@ -89,7 +89,7 @@ if [[ "${forward_output}" != *"already listening"* ]]; then
     exit 1
 fi
 
-backend_line="$(grep -nF "KUBECONFIG=\"\${DCM_KUBECONFIG}\" bash \"\${REPO_ROOT}/scripts/deploy-osac-backend.sh\"" \
+backend_line="$(grep -nF 'deploy-osac-backend.sh" --aap-mode' \
     "${REPO_ROOT}/scripts/deploy-dcm.sh" | grep -v -- '--tear-down' | cut -d: -f1)"
 ensure_line="$(grep -nF 'ensure_osac_port_forwards || exit 1' \
     "${REPO_ROOT}/scripts/deploy-dcm.sh" | cut -d: -f1)"
@@ -116,6 +116,13 @@ if ! grep -Fq -- '--osac-aap-mode MODE' "${REPO_ROOT}/scripts/deploy-dcm.sh" || 
    ! grep -Fq "osac-aap-platform.\${AAP_NAMESPACE}.svc.cluster.local/api/controller" \
        "${REPO_ROOT}/scripts/deploy-osac-aap.sh"; then
     printf 'FAIL: mock/real AAP mode toggle wiring is incomplete\n' >&2
+    exit 1
+fi
+
+if ! grep -Fq -- '--osac-fulfillment-mode MODE' "${REPO_ROOT}/scripts/deploy-dcm.sh" || \
+   ! grep -Fq -- '--osac-fulfillment-mode)' "${REPO_ROOT}/tests/run-e2e.sh" || \
+   ! grep -Fq 'osac-fulfillment-simulator:local' "${REPO_ROOT}/tests/compose-osac-simulator.yaml"; then
+    printf 'FAIL: deterministic fulfillment simulator mode is not wired through deployment and harness\n' >&2
     exit 1
 fi
 

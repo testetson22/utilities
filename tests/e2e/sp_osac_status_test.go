@@ -64,6 +64,8 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 				osacClusterPayload(name))
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated),
+				"cluster create must return 201 before status polling begins")
 
 			var createResp osacCreateResponse
 			decodeJSON(resp, &createResp)
@@ -100,8 +102,7 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 				"CloudEvent type should be dcm.status.cluster")
 			// Actual source format observed: "dcm/providers/osac-sp-cluster"
 			// The SP uses dcm/providers/<provider-name> — not just the bare "osac-sp" prefix.
-			Expect(matched.Source).To(HavePrefix("dcm/providers/osac-sp"),
-				"CloudEvent source must follow the dcm/providers/<provider-name> format; actual: %s", matched.Source)
+			Expect(matched.Source).To(Equal("dcm/providers/osac-sp-cluster"))
 			Expect(matched.ID).NotTo(BeEmpty(),
 				"CloudEvent id must be set (unique per event)")
 			Expect(matched.DataContentType).To(Equal("application/json"),
@@ -116,6 +117,137 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 				"data.message field should be present in the CloudEvent (may be empty string)")
 		})
 
+		It("publishes a DELETED CloudEvent after simulator-backed cluster deletion", func() {
+			requireSimulatorScenario("delete-delayed")
+			templateID := osacTemplateID()
+			if templateID == "" {
+				Skip("OSAC_E2E_CLUSTER_TEMPLATE_ID not set — cluster status tests require a real OSAC backend")
+			}
+
+			sub, err := nc.SubscribeSync(osacClusterNATSSubject)
+			Expect(err).NotTo(HaveOccurred())
+			defer sub.Unsubscribe()
+			Expect(nc.Flush()).To(Succeed())
+
+			name := uniqueName("e2e-osac-nats-delete")
+			resp, err := doOsacClusterRequest(http.MethodPost,
+				fmt.Sprintf("/clusters?id=%s", name), osacClusterPayload(name))
+			Expect(err).NotTo(HaveOccurred())
+			var createResp osacCreateResponse
+			decodeJSON(resp, &createResp)
+			resp.Body.Close()
+			clusterID := osacIDFromCreateResponse(createResp)
+			Expect(clusterID).NotTo(BeEmpty())
+
+			deleteResp, err := doOsacClusterRequest(http.MethodDelete, "/clusters/"+clusterID, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deleteResp.StatusCode).To(Equal(http.StatusNoContent))
+			deleteResp.Body.Close()
+
+			var deleted *osacCloudEvent
+			deadline := time.Now().Add(120 * time.Second)
+			for time.Now().Before(deadline) {
+				msg, err := sub.NextMsg(5 * time.Second)
+				if err != nil {
+					continue
+				}
+				var event osacCloudEvent
+				if json.Unmarshal(msg.Data, &event) == nil && event.Data.ID == clusterID && event.Data.Status == "DELETED" {
+					deleted = &event
+					break
+				}
+			}
+			Expect(deleted).NotTo(BeNil(), "no DELETED dcm.cluster CloudEvent received for %s", clusterID)
+			Expect(deleted.Type).To(Equal("dcm.status.cluster"))
+			Expect(deleted.Source).To(Equal("dcm/providers/osac-sp-cluster"))
+			Expect(deleted.Data.Message).NotTo(BeNil())
+		})
+
+		It("maps simulator FAILED state and publishes a failure event", func() {
+			requireSimulatorScenario("failed")
+			sub, err := nc.SubscribeSync(osacClusterNATSSubject)
+			Expect(err).NotTo(HaveOccurred())
+			defer sub.Unsubscribe()
+			Expect(nc.Flush()).To(Succeed())
+			name := uniqueName("e2e-osac-sim-failed")
+			resp, err := doOsacClusterRequest(http.MethodPost, fmt.Sprintf("/clusters?id=%s", name), osacClusterPayload(name))
+			Expect(err).NotTo(HaveOccurred())
+			var created osacCreateResponse
+			decodeJSON(resp, &created)
+			resp.Body.Close()
+			clusterID := osacIDFromCreateResponse(created)
+			Expect(clusterID).NotTo(BeEmpty())
+			defer deleteTestOsacCluster(clusterID)
+
+			Eventually(func() string {
+				getResp, getErr := doOsacClusterRequest(http.MethodGet, "/clusters/"+clusterID, "")
+				if getErr != nil {
+					return ""
+				}
+				defer getResp.Body.Close()
+				var cluster osacCluster
+				if getResp.StatusCode != http.StatusOK {
+					return ""
+				}
+				decodeJSON(getResp, &cluster)
+				return cluster.Status
+			}, "30s", "1s").Should(Equal("FAILED"))
+			var failedEvent *osacCloudEvent
+			for i := 0; i < 24 && failedEvent == nil; i++ {
+				msg, msgErr := sub.NextMsg(5 * time.Second)
+				if msgErr != nil {
+					continue
+				}
+				var event osacCloudEvent
+				if json.Unmarshal(msg.Data, &event) == nil && event.Data.ID == clusterID && event.Data.Status == "FAILED" {
+					failedEvent = &event
+				}
+			}
+			Expect(failedEvent).NotTo(BeNil(), "simulator FAILED state must produce a correlated failure event")
+		})
+
+		It("maps simulator ACTIVE state with kubeconfig", func() {
+			requireSimulatorScenario("ready")
+			name := uniqueName("e2e-osac-sim-active")
+			resp, err := doOsacClusterRequest(http.MethodPost, fmt.Sprintf("/clusters?id=%s", name), osacClusterPayload(name))
+			Expect(err).NotTo(HaveOccurred())
+			var created osacCreateResponse
+			decodeJSON(resp, &created)
+			resp.Body.Close()
+			clusterID := osacIDFromCreateResponse(created)
+			Expect(clusterID).NotTo(BeEmpty())
+			defer deleteTestOsacCluster(clusterID)
+
+			getResp, err := doOsacClusterRequest(http.MethodGet, "/clusters/"+clusterID, "")
+			Expect(err).NotTo(HaveOccurred())
+			defer getResp.Body.Close()
+			var cluster osacCluster
+			decodeJSON(getResp, &cluster)
+			Expect(cluster.Status).To(Equal("ACTIVE"))
+			Expect(cluster.Kubeconfig).NotTo(BeNil())
+			Expect(*cluster.Kubeconfig).NotTo(BeEmpty())
+		})
+
+		It("maps simulator backend transport errors to an SP gateway error", func() {
+			if os.Getenv("OSAC_FULFILLMENT_MODE") != "simulator" ||
+				(os.Getenv("SIMULATOR_SCENARIO") != "backend-unavailable" && os.Getenv("SIMULATOR_SCENARIO") != "backend-timeout") {
+				Skip("requires OSAC_FULFILLMENT_MODE=simulator and backend-unavailable/backend-timeout")
+			}
+			name := uniqueName("e2e-osac-sim-unavailable")
+			resp, err := doOsacClusterRequest(http.MethodPost, fmt.Sprintf("/clusters?id=%s", name), osacClusterPayload(name))
+			Expect(err).NotTo(HaveOccurred())
+			var created osacCreateResponse
+			decodeJSON(resp, &created)
+			resp.Body.Close()
+			clusterID := osacIDFromCreateResponse(created)
+			Expect(clusterID).NotTo(BeEmpty())
+
+			getResp, err := doOsacClusterRequest(http.MethodGet, "/clusters/"+clusterID, "")
+			Expect(err).NotTo(HaveOccurred())
+			defer getResp.Body.Close()
+			Expect(getResp.StatusCode).To(Equal(http.StatusBadGateway))
+		})
+
 	})
 
 	// ------------------------------------------------------------------ #
@@ -125,7 +257,7 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 	// drains messages until a matching VM ID is found.
 	// ------------------------------------------------------------------ #
 
-	Context("VM status events", Label("cluster"), func() {
+	Context("VM status events", Label("vm"), func() {
 
 		It("publishes a CloudEvent on dcm.vm when a VM is created", func() {
 			if os.Getenv("OSAC_E2E_VM_TEMPLATE_ID") == "" {
@@ -143,6 +275,8 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 				osacVMPayload(name))
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
+			Expect(resp.StatusCode).To(Equal(http.StatusCreated),
+				"VM create must return 201 before status polling begins")
 
 			var createResp osacCreateResponse
 			decodeJSON(resp, &createResp)
@@ -178,8 +312,7 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 			Expect(matched.Type).To(Equal("dcm.status.vm"),
 				"CloudEvent type should be dcm.status.vm")
 			// Actual source format observed: "dcm/providers/osac-sp-vm"
-			Expect(matched.Source).To(HavePrefix("dcm/providers/osac-sp"),
-				"CloudEvent source must follow the dcm/providers/<provider-name> format; actual: %s", matched.Source)
+			Expect(matched.Source).To(Equal("dcm/providers/osac-sp-vm"))
 			Expect(matched.ID).NotTo(BeEmpty(),
 				"CloudEvent id must be set (unique per event)")
 			Expect(matched.DataContentType).To(Equal("application/json"),

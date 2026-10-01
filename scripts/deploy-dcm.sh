@@ -145,6 +145,8 @@ EOF
                                   With --tear-down, also removes the OSAC backend namespace.
   --osac-aap-mode MODE           Select OSAC operator AAP backend: mock (default) or real.
                                   real deploys the disposable AAP Gateway integration.
+  --osac-fulfillment-mode MODE   Select OSAC fulfillment backend: real (default) or simulator.
+                                  simulator uses the deterministic upstream-backed gRPC fixture.
   --acm-cluster-sp-repo URL      Git repo for acm-cluster-service-provider (default: ${DEFAULT_ACM_CLUSTER_SP_REPO})
   --acm-cluster-sp-branch REF    Branch to clone (default: ${DEFAULT_ACM_CLUSTER_SP_BRANCH})
   --kubeconfig PATH              Path to kubeconfig file (auto-detected if omitted)
@@ -397,6 +399,10 @@ validate_acm_cluster_provider() {
 validate_osac_provider() {
     # OSAC SP needs no cluster access — validate credentials, CA, and env-agent dependency.
     log "Validating OSAC service provider prerequisites"
+    if [[ "${OSAC_FULFILLMENT_MODE}" == "simulator" ]]; then
+        info "Using deterministic fulfillment-service simulator"
+        return 0
+    fi
 
     # Auto-detect and wire in a backend deployed via scripts/deploy-osac-backend.sh.
     # This makes --osac-service-provider turn-key: no manual `source` of the backend
@@ -924,6 +930,7 @@ DEPLOY_ACM_MCE=""
 DEPLOY_CNV=false
 DEPLOY_OSAC_BACKEND=false
 OSAC_AAP_MODE="${OSAC_AAP_MODE:-mock}"
+OSAC_FULFILLMENT_MODE="${OSAC_FULFILLMENT_MODE:-real}"
 GITOPS_ENABLED=false
 ACM_CLUSTER_SP_REPO="${DEFAULT_ACM_CLUSTER_SP_REPO}"
 ACM_CLUSTER_SP_BRANCH="${DEFAULT_ACM_CLUSTER_SP_BRANCH}"
@@ -993,6 +1000,9 @@ while [[ $# -gt 0 ]]; do
         --osac-aap-mode)
             [[ "$2" == "mock" || "$2" == "real" ]] || { err "--osac-aap-mode must be mock or real"; exit 1; }
             OSAC_AAP_MODE="$2"; shift 2 ;;
+        --osac-fulfillment-mode)
+            [[ "$2" == "real" || "$2" == "simulator" ]] || { err "--osac-fulfillment-mode must be real or simulator"; exit 1; }
+            OSAC_FULFILLMENT_MODE="$2"; shift 2 ;;
         --deploy-acm)
             [[ -n "${DEPLOY_ACM_MCE}" ]] && { err "--deploy-acm and --deploy-mce are mutually exclusive"; exit 1; }
             DEPLOY_ACM_MCE="acm"; shift ;;
@@ -1068,6 +1078,17 @@ for i in $(seq 0 $((PROV_COUNT - 1))); do
     [[ "${PROV_ENABLED[$i]}" == true ]] || continue
     collect_provider_compose "${i}"
 done
+
+if [[ "${OSAC_FULFILLMENT_MODE}" == "simulator" ]]; then
+    for i in $(seq 0 $((PROV_COUNT - 1))); do
+        if [[ "${PROV_ENABLED[$i]}" == true && "${PROV_FLAGS[$i]}" == "osac-service-provider" ]]; then
+            simulator_override="${REPO_ROOT}/tests/compose-osac-simulator.yaml"
+            COMPOSE_EXTRA_FILE_ARGS+=("-f" "${simulator_override}")
+            info "Injecting deterministic OSAC fulfillment simulator"
+            break
+        fi
+    done
+fi
 
 if [[ "${GITOPS_ENABLED}" == true ]]; then
     if [[ ! -f "${GITOPS_COMPOSE_OVERRIDE}" ]]; then
@@ -1455,6 +1476,13 @@ fi
 
 if [[ "${CLEANUP_ON_FAILURE}" == true ]]; then
     trap 'err "Deploy failed — cleaning up"; tear_down "${CONTROL_PLANE_TMP_DIR}" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"}' ERR
+fi
+
+if [[ "${OSAC_FULFILLMENT_MODE}" == "simulator" ]]; then
+    simulator_image="${OSAC_SIMULATOR_IMAGE:-osac-fulfillment-simulator:local}"
+    export OSAC_SIMULATOR_CERT_FILE="${REPO_ROOT}/tests/osac-simulator/tls-cert.pem"
+    log "Building deterministic OSAC fulfillment simulator (${simulator_image})"
+    podman build -t "${simulator_image}" "${REPO_ROOT}/tests/osac-simulator"
 fi
 
 log "Starting DCM stack"
