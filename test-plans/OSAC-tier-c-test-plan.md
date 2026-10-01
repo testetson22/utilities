@@ -4,7 +4,7 @@
 |---|---|
 | **Epic** | [FLPATH-4758](https://redhat.atlassian.net/browse/FLPATH-4758) — [Test Plan] Testing for DCM: OSAC provider |
 | **Product epic** | [FLPATH-4459](https://redhat.atlassian.net/browse/FLPATH-4459) — DCM: OSAC service provider |
-| **Status** | Draft — Tier C lifecycle cases are not implemented; Tier B++ dispatch discovery is implemented as opt-in OCP-backed orchestration-boundary coverage. TBP-010 and TBP-020 pass in the tested Phase 2 environment; TBP-030 currently fails because the linked ClusterOrder remains without `status.conditions` |
+| **Status** | Draft — Tier C lifecycle cases are not implemented; Tier B++ dispatch discovery is implemented as opt-in OCP-backed orchestration-boundary coverage. TBP-010/020/030 pass in the tested real-AAP Phase 2 environment; allocation and infrastructure lifecycle remain gated |
 | **Depends on** | Upstream Tier B (`TC-TB-*`, kind stack in `osac-service-provider`) + utilities self-contained OCP backend (Tier B stack port) + `make test-osac-sp` API lifecycle |
 
 ### Where utilities sits today
@@ -52,7 +52,7 @@ contracts without proving multi-node provisioning.
 | Deployment topology | Default resources | Useful OSAC coverage | Important limits |
 |---------------------|-------------------|----------------------|------------------|
 | SNO | 1 master/worker: 18 CPU, 64 GiB RAM, 200 GB disk | Tier B API and Tier B++ dispatch; can use an external AAP or the Tier B mock. Suitable for a small single-target virtual BMC/discovery experiment if capacity permits. | One schedulable node; cannot spread controller replicas across nodes. The 64 GiB node budget is not enough to assume a redundant in-cluster AAP deployment after OCP overhead. Not a meaningful multi-node hosted-cluster or distributed-storage test. |
-| Compact | 3 masters acting as workers: 18 CPU and 40 GiB RAM each; 54 CPU/120 GiB aggregate; 150 GB disk each (450 GB aggregate) | Tier B++; can schedule AAP controller replicas across OCP nodes and host a bounded virtual Agent/BMC pilot, subject to measured post-deployment capacity. **Selected edge94 pilot profile: compact + HPP; deployment is pending.** | All nodes still share the edge94 physical host. HPP volumes are node-bound and do not provide storage failover. The aggregate defaults are not a guarantee that AAP or full provisioning will fit; verify node allocatable/requested resources and host headroom. |
+| Compact | 3 masters acting as workers: 18 CPU and 40 GiB RAM each; 54 CPU/120 GiB aggregate; 150 GB disk each (450 GB aggregate) | Tier B++; can schedule AAP controller replicas across OCP nodes and host a bounded virtual Agent/BMC pilot, subject to measured post-deployment capacity. **Selected edge94 pilot profile: compact + HPP; deployed and validated.** | All nodes still share the edge94 physical host. HPP volumes are node-bound and do not provide storage failover. The aggregate defaults are not a guarantee that AAP or full provisioning will fit; verify node allocatable/requested resources and host headroom. |
 | Standard | 3 masters: 10 CPU/18 GiB each; 3 workers: 12 CPU/32 GiB each; 66 CPU/150 GiB aggregate; 100 GB disk each (600 GB aggregate) | Tier B++ and greater scheduling capacity for AAP and multiple virtual targets; suitable for broader multi-node integration where its resources are available. | Larger footprint. It remains a single-host failure domain if all six OCP VMs run on one hypervisor. ODF is only an option when the deployment satisfies its multi-node and `WORKER_MEMORY >= 48000` requirements. |
 
 **Storage selection:** HPP is appropriate for the initial contract-focused pilot when PVC data is
@@ -178,7 +178,7 @@ The table in each test case below explicitly calls out whether the case:
   unreachable in Tier B due to AAP mock / static fixtures)
 - **Net-new** (tests scenarios that have no Tier B equivalent at all)
 
-## Intermediate milestone: Tier B++ dispatch boundary (diagnostic implementation; TBP-030 currently failing)
+## Intermediate milestone: Tier B++ dispatch boundary (diagnostic implementation; TBP-010/020/030 passing)
 
 **Goal:** establish exactly how far a request through the DCM OSAC SP reaches the real
 fulfillment-service, osac-operator, and BMFO *without* BMC/Ironic or a ready cluster.
@@ -228,19 +228,22 @@ run against the OCP Phase 2 backend. TBP-010 passed: the SP returned 201, GET/li
 resolved the same ID, and a matching `dcm.cluster` CloudEvent was observed. ClusterOrder
 discovery uses `oc get clusterorders -A` and retains each object's namespace for
 subsequent retrieval. TBP-020 now passes: a new order is created in the `default`
-namespace and carries a stable label linking it to the exact SP cluster ID. TBP-030
-fails after its bounded window because the linked order remains without
-`status.conditions`; no named `blocked: no available Agents` condition is emitted. No
-`BareMetalInstance` or Agent objects are present; only the Agent CRD is installed.
+namespace and carries a stable label linking it to the exact SP cluster ID. TBP-030 now
+passes after the Phase 2 environment supplied the missing external-IP CRDs, Agent read
+RBAC, and real-mode ClusterOrder namespace configuration. The linked order reports
+`NamespaceCreated=True` and `Progressing=True` with `PreparingInfrastructure`; no Agent
+or BareMetalInstance objects are present. In real-AAP mode the operator also looked up
+the exact template, launched the linked no-op job, and observed it succeed. This proves
+the OSAC dispatch boundary, not allocation or infrastructure provisioning.
 
-The observed stop point is after fulfillment-service creates the ClusterOrder, before
-the osac-operator writes status. Fulfillment-controller logs show successful tenant
-initialization and order creation, while osac-operator logs show no corresponding status
-transition before cleanup. Keycloak 26.6.0 is deployed, and the `system`/`shared`
-Organizations plus `tenant-idp-manager` realm role are present. The tested environment
-still has no Agent objects, so the absence of a named blocked condition must remain a
-diagnostic failure rather than being treated as successful reconciliation. Resolve or
-explicitly document this operator/backend condition before enabling allocation assertions.
+The observed stop point is after fulfillment-service creates the ClusterOrder and the
+operator prepares its namespace/RBAC and dispatches the configured AAP no-op job. The
+real job succeeds and the order remains `Progressing` because no Agent/BMI/HostedCluster
+exists. The SP reports the corresponding nonterminal state. Cleanup initially exposed
+missing external-IP CRDs, missing Agent read RBAC, and a missing delete template; these
+are now part of the turnkey Phase 2/real-AAP setup and the focused run cleans up
+asynchronously. Allocation assertions remain disabled until real Agent prerequisites are
+available.
 
 ### Proposed assertions and explicit gates
 

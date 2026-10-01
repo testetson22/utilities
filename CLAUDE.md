@@ -280,9 +280,10 @@ infrastructure. It validates OpenShift authentication/resource discovery, exact 
 ClusterOrder linkage, request translation, NATS correlation, and the observable operator
 stop point. It does not prove Agent allocation, AAP execution, BMC/Ironic access, real
 bare-metal provisioning, `ACTIVE` state, kubeconfig usability, VM networking, or real
-infrastructure cleanup. The current Phase 2 result is TBP-010/TBP-020 passing and TBP-030
-failing because the linked ClusterOrder has no `status.conditions`; this is not a Tier C
-substitute. TBP-040/050 remain disabled until suitable Agent resources or a
+infrastructure cleanup. The current real-AAP Phase 2 result is TBP-010/TBP-020/TBP-030
+passing; the linked order reaches `NamespaceCreated=True` and `Progressing=True` with
+`PreparingInfrastructure`, then stops because no Agent/BMI/HostedCluster exists. This is
+not a Tier C substitute. TBP-040/050 remain disabled until suitable Agent resources or a
 contract-faithful simulator makes those paths reachable.
 
 ```bash

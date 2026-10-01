@@ -119,4 +119,16 @@ if ! grep -Fq -- '--osac-aap-mode MODE' "${REPO_ROOT}/scripts/deploy-dcm.sh" || 
     exit 1
 fi
 
+if ! grep -Fq 'osac.openshift.io_externalipattachments.yaml' \
+        "${REPO_ROOT}/scripts/deploy-osac-backend.sh" || \
+   ! grep -Fq 'osac.openshift.io_externalips.yaml' \
+        "${REPO_ROOT}/scripts/deploy-osac-backend.sh" || \
+   ! grep -Fq 'osac-operator-agent-reader' \
+        "${REPO_ROOT}/scripts/deploy-osac-backend.sh" || \
+   ! grep -Fq 'osac-delete-hosted-cluster' \
+        "${REPO_ROOT}/scripts/deploy-osac-aap.sh"; then
+    printf 'FAIL: OSAC cleanup prerequisites are not wired into turnkey deployment\n' >&2
+    exit 1
+fi
+
 printf 'OSAC deploy wiring tests passed\n'

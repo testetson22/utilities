@@ -131,6 +131,10 @@ var _ = Describe("OSAC SP — Tier B+ dispatch discovery", Label("sp", "osac", "
 		Expect(clusterOrder).NotTo(BeNil())
 		Expect(osacObjectReferencesID(clusterOrder, clusterID)).To(BeTrue(),
 			"ClusterOrder must carry a stable label, annotation, owner reference, or spec reference to the exact SP ID")
+		templateID, found := nestedString(clusterOrder, "spec", "templateID")
+		Expect(found).To(BeTrue(), "linked ClusterOrder must expose the translated templateID")
+		Expect(templateID).To(Equal(osacTemplateID()),
+			"ClusterOrder templateID must preserve the exact SP request template")
 	})
 
 	It("TBP-030 reports a linked ClusterOrder condition and corresponding SP state", func() {
@@ -163,6 +167,25 @@ var _ = Describe("OSAC SP — Tier B+ dispatch discovery", Label("sp", "osac", "
 				"condition %s must have a Kubernetes condition status", conditionType)
 			GinkgoWriter.Printf("ClusterOrder %s condition: type=%s status=%s reason=%v message=%v\n",
 				name, conditionType, conditionStatus, condition["reason"], condition["message"])
+		}
+		if os.Getenv("OSAC_AAP_MODE") == "real" {
+			jobs, found := nestedSlice(clusterOrder, "status", "provisioningJobs")
+			Expect(found).To(BeTrue(), "real-AAP ClusterOrder must record provisioning job history")
+			Expect(jobs).NotTo(BeEmpty(), "real-AAP ClusterOrder must record the linked job ID")
+			for _, raw := range jobs {
+				job, ok := raw.(map[string]interface{})
+				Expect(ok).To(BeTrue(), "provisioning job history entries must be objects")
+				jobID, hasID := job["id"].(string)
+				if !hasID {
+					jobID, hasID = job["jobID"].(string)
+				}
+				Expect(hasID && jobID != "").To(BeTrue(), "provisioning job history must contain an AAP job ID")
+				state, hasState := job["state"].(string)
+				if !hasState {
+					state, hasState = job["currentState"].(string)
+				}
+				Expect(hasState && state != "").To(BeTrue(), "provisioning job history must contain state")
+			}
 		}
 
 		resp, err := doOsacClusterRequest(http.MethodGet, "/clusters/"+clusterID, "")
@@ -314,6 +337,22 @@ func nestedSlice(object map[string]interface{}, fields ...string) ([]interface{}
 		}
 	}
 	result, ok := current.([]interface{})
+	return result, ok
+}
+
+func nestedString(object map[string]interface{}, fields ...string) (string, bool) {
+	var current interface{} = object
+	for _, field := range fields {
+		values, ok := current.(map[string]interface{})
+		if !ok {
+			return "", false
+		}
+		current, ok = values[field]
+		if !ok {
+			return "", false
+		}
+	}
+	result, ok := current.(string)
 	return result, ok
 }
 

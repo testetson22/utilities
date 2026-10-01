@@ -817,8 +817,24 @@ deploy_phase2() {
         osac.openshift.io_baremetalinstances.yaml \
         osac.openshift.io_baremetalpools.yaml \
         osac.openshift.io_computeinstances.yaml \
+        osac.openshift.io_externalipattachments.yaml \
+        osac.openshift.io_externalips.yaml \
         tenants.osac.openshift.io.yaml; do
-        fetch_upstream "${crd}" "${crds_tmp}" "test/e2e/manifests-tierb/crds"
+        if [[ "${crd}" == osac.openshift.io_externalipattachments.yaml || \
+              "${crd}" == osac.openshift.io_externalips.yaml ]]; then
+            # These API types are owned by osac-operator rather than the SP
+            # repository's Tier B fixture bundle. Install the types so the
+            # ClusterOrder finalizer can safely observe zero objects even when
+            # networking controllers are disabled.
+            local operator_crd_url="https://raw.githubusercontent.com/osac-project/osac-operator/main/charts/operator-crds/templates/${crd}"
+            curl --fail --silent --show-error --location "${operator_crd_url}" \
+                -o "${crds_tmp}/${crd}.tpl"
+            sed '/{{- if .Values.install }}/d;/{{- end }}/d' \
+                "${crds_tmp}/${crd}.tpl" > "${crds_tmp}/${crd}"
+            rm -f "${crds_tmp}/${crd}.tpl"
+        else
+            fetch_upstream "${crd}" "${crds_tmp}" "test/e2e/manifests-tierb/crds"
+        fi
         # baremetalhosts.metal3.io is owned by CNV/metal3 on OCP; applying it
         # conflicts with the cluster-version-operator. Skip if already present.
         if [[ "${crd}" == "baremetalhosts.metal3.io.yaml" ]] \
@@ -869,6 +885,35 @@ deploy_phase2() {
             "${PHASE2_PART_OF_KEY}=${PHASE2_PART_OF_LABEL}"
         info "hardware-inventory created and labeled for teardown ownership"
     fi
+
+    # The operator lists Agents while reconciling and deleting ClusterOrders.
+    # Keep this namespace-scoped and read-only; a real Agent controller remains
+    # a separate Tier C prerequisite.
+    oc apply -f - <<YAML
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-operator-agent-reader
+  namespace: hardware-inventory
+rules:
+  - apiGroups: [agent-install.openshift.io]
+    resources: [agents]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-operator-agent-reader
+  namespace: hardware-inventory
+subjects:
+  - kind: ServiceAccount
+    name: osac-operator
+    namespace: ${NS}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: osac-operator-agent-reader
+YAML
 
     # --- BMFO stub secrets ---------------------------------------------------
     log "Applying BMFO stub secrets"

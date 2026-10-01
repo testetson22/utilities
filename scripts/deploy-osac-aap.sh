@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 AAP_NAMESPACE="${OSAC_AAP_NAMESPACE:-osac-aap-test}"
 OSAC_NAMESPACE="${OSAC_BACKEND_NAMESPACE:-osac-test-backend}"
+OSAC_CLUSTER_ORDER_NAMESPACE="${OSAC_CLUSTER_ORDER_NAMESPACE:-default}"
 MANIFEST_FILE="${OSAC_AAP_MANIFEST:-${REPO_ROOT}/tests/manifest.zip}"
 AAP_API_PORT="${OSAC_AAP_API_PORT:-18081}"
 TEAR_DOWN=false
@@ -283,11 +284,29 @@ if [[ -z "${template_id}" ]]; then
         --data "$(jq -n --argjson inventory "${inventory_id}" --argjson project "${project_id}" '{name:"osac-create-hosted-cluster",description:"OSAC real AAP contract-test template",job_type:"run",inventory:$inventory,project:$project,playbook:"osac-create-hosted-cluster.yml",ask_variables_on_launch:true,allow_simultaneous:true}')" \
         "${gateway_api}/job_templates/" | jq -er '.id')"
 fi
-info "OSAC real AAP template ready (project=${project_id}, job_template=${template_id})"
+delete_template_response="$(curl --silent --show-error --fail --max-time 30 \
+    --header "Authorization: Bearer ${gateway_pat}" \
+    "${gateway_api}/job_templates/?name=osac-delete-hosted-cluster")"
+delete_template_id="$(jq -er '.results[0].id // empty' <<<"${delete_template_response}" || true)"
+if [[ -z "${delete_template_id}" ]]; then
+    delete_template_id="$(curl --silent --show-error --fail --max-time 30 \
+        --header "Authorization: Bearer ${gateway_pat}" \
+        --header 'Content-Type: application/json' \
+        --data "$(jq -n --argjson inventory "${inventory_id}" --argjson project "${project_id}" '{name:"osac-delete-hosted-cluster",description:"OSAC real AAP contract-test cleanup template",job_type:"run",inventory:$inventory,project:$project,playbook:"osac-create-hosted-cluster.yml",ask_variables_on_launch:true,allow_simultaneous:true}')" \
+        "${gateway_api}/job_templates/" | jq -er '.id')"
+fi
+info "OSAC real AAP templates ready (create=${template_id}, delete=${delete_template_id})"
 
+# Remove the previous imperative override before Helm re-renders the Deployment;
+# otherwise --reuse-values can retain an empty valueFrom alongside the new value.
+oc set env deployment/osac-operator -n "${OSAC_NAMESPACE}" OSAC_CLUSTER_ORDER_NAMESPACE- \
+    >/dev/null 2>&1 || true
 helm upgrade osac-operator oci://ghcr.io/osac-project/charts/osac-operator \
     --version "${OSAC_OPERATOR_CHART_VERSION:-0.0.18}" --namespace "${OSAC_NAMESPACE}" \
     --reuse-values --set-string aap.url="http://osac-aap-platform.${AAP_NAMESPACE}.svc.cluster.local/api/controller" \
     --set-string aap.token="${gateway_pat}" --set-string aap.insecureSkipVerify=true >/dev/null
+oc set env deployment/osac-operator -n "${OSAC_NAMESPACE}" \
+    OSAC_CLUSTER_ORDER_NAMESPACE="${OSAC_CLUSTER_ORDER_NAMESPACE}"
+oc rollout status deployment/osac-operator -n "${OSAC_NAMESPACE}" --timeout=3m
 
 log "Real AAP mode ready; OSAC operator uses Gateway-backed Controller API"
