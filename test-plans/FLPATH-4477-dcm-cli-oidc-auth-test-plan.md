@@ -45,8 +45,8 @@ The DCM CLI adds OIDC authentication using the OAuth 2.0 Device Authorization Gr
 - RHEL 9.x host with Podman 5.x and podman-compose
 - `dcm` CLI installed from a [GitHub release](https://github.com/dcm-project/cli/releases) **that includes OIDC authentication** (`dcm login` / `dcm logout` must exist; verify with `dcm login --help` before running cases)
 - DCM control-plane stack available (auth-enabled for most cases; auth-disabled procedure documented for TC-09)
-- Keycloak published on the host at `http://localhost:8180` (compose maps `8180:8080`) with the `dcm` realm imported
-- Hostname `keycloak` resolves on the host to the Keycloak container IP (via `/etc/hosts`) so CLI discovery and token endpoints match the issuer advertised by stock compose
+- Keycloak published on the host at `http://localhost:8180` by control-plane `deploy/compose.auth.yaml` (loaded with the `auth` profile), with the `dcm` realm imported
+- Hostname `keycloak` resolves on the host to the Keycloak container IP (via `/etc/hosts`) so CLI discovery and token endpoints match the issuer advertised by the auth Compose model
 
 
 
@@ -67,7 +67,7 @@ From control-plane `deploy/keycloak/realm-export.json` (and compose env for secr
 
 **Credential sourcing:** Resolve `<DCM_DEV_USER_PASSWORD>` and `<DCM_PROXY_SECRET>` from the control-plane compose environment or Keycloak realm export used by the local stack. Do not commit real secrets into this plan.
 
-**Issuer URL rule:** This plan uses `http://keycloak:8080/realms/dcm` for `--issuer-url` / `DCM_ISSUER_URL` / `AUTH_ISSUER_URL`. That value MUST equal the `issuer` string from OIDC discovery. Stock control-plane compose sets `KC_HOSTNAME=http://keycloak:8080`, so discovery returns that issuer whether you hit Keycloak via `http://keycloak:8080` or the published port `http://localhost:8180`.
+**Issuer URL rule:** This plan uses `http://keycloak:8080/realms/dcm` for `--issuer-url` / `DCM_ISSUER_URL` / `AUTH_ISSUER_URL`. That value MUST equal the `issuer` string from OIDC discovery. Control-plane `deploy/compose.auth.yaml` sets `KC_HOSTNAME=http://keycloak:8080`, so discovery returns that issuer whether you hit Keycloak via `http://keycloak:8080` or the published port `http://localhost:8180`.
 
 **Why not** `localhost:8180` **as issuer:** Overriding `KC_HOSTNAME` to `http://localhost:8180` makes discovery look host-friendly, but the control-plane container cannot reach Keycloak at `localhost:8180` (`localhost` inside the container is not the host). Host-gateway / `extra_hosts` workarounds are brittle (IPv6 `::1` vs host-gateway IPv4). Keep the stock `keycloak:8080` issuer so the control-plane and CLI share one reachable issuer; add a host `/etc/hosts` entry so the CLI on the host can resolve `keycloak`.
 
@@ -85,13 +85,13 @@ dcm login --help
 
 **Expected:** `dcm` is on `PATH`, prints version information, and `dcm login --help` documents the login command. If `login` is missing, the chosen release does not include OIDC authentication - pick a release (or build) that does before continuing.
 
-**Step 2: Start the control-plane stack with auth enabled (stock keycloak issuer)**
+**Step 2: Start the control-plane stack with the auth Compose override enabled (stock Keycloak issuer)**
 
 Use stock Keycloak hostname (`KC_HOSTNAME=http://keycloak:8080`). Do not override it to localhost.
 
 ```bash
 cd <control-plane-repo>
-AUTH_DISABLED=false AUTH_ISSUER_URL=http://keycloak:8080/realms/dcm AUTH_JWT_AUDIENCE=dcm-api make compose-up
+AUTH=true AUTH_DISABLED=false AUTH_ISSUER_URL=http://keycloak:8080/realms/dcm AUTH_JWT_AUDIENCE=dcm-api make compose-up
 ```
 
 **Expected:** All services healthy (Keycloak takes 30-60s for realm import). Control plane validates JWTs against `http://keycloak:8080/realms/dcm`.
@@ -128,7 +128,7 @@ rm -f ~/.dcm/tokens.json
 
 ```bash
 cd <control-plane-repo>
-# Stop the auth-enabled stack first if it is running, then:
+AUTH=true make compose-down
 AUTH_DISABLED=true make compose-up
 ```
 
@@ -1235,7 +1235,7 @@ Global Setup (OIDC-capable install, auth-enabled stack)
 4. **No HTTPS enforcement on issuer URL**: The CLI does not reject `http://` issuer URLs. In production, Keycloak should always be behind TLS. The CLI warns about HTTP for API calls but not for the issuer URL itself.
 5. **Single-process refresh lock**: The `sync.Mutex` in `AuthTransport` only protects against concurrent goroutines within a single process. Multiple `dcm` processes may race on refresh token usage if Keycloak has `revoke-refresh-token=true`.
 6. **Browser auto-open**: `xdg-open` / `open` / `cmd start` may fail in headless environments. The CLI prints the URL to stderr as fallback.
-7. **Issuer hostname**: Discovery `issuer` must match `--issuer-url`. Stock compose advertises `http://keycloak:8080/realms/dcm`. Keep that issuer for control-plane reachability; add a host `/etc/hosts` entry so the CLI can resolve `keycloak`. Do not override `KC_HOSTNAME` to `localhost:8180` - the control-plane container cannot use that issuer.
+7. **Issuer hostname**: Discovery `issuer` must match `--issuer-url`. The auth Compose model advertises `http://keycloak:8080/realms/dcm`. Keep that issuer for control-plane reachability; add a host `/etc/hosts` entry so the CLI can resolve `keycloak`. Do not override `KC_HOSTNAME` to `localhost:8180` - the control-plane container cannot use that issuer.
 8. **TC-19 expiry field is insufficient**: `IsExpired` reads JWT `exp` from `access_token` before `TokenData.Expiry`. TC-19 must invalidate `access_token` (or wait for real JWT expiry) or refresh is never attempted.
 
 ---

@@ -25,7 +25,7 @@ func initAcmClusterSP() {
 	}
 	acmClusterSPBaseURL = strings.TrimRight(acmClusterSPBaseURL, "/")
 
-	resp, err := httpClient.Get(acmClusterSPBaseURL + "/clusters/health")
+	resp, err := unauthenticatedClient.Get(acmClusterSPBaseURL + "/clusters/health")
 	if err != nil {
 		GinkgoWriter.Printf("ACM Cluster SP not reachable at %s: %v — ACM SP tests will be skipped\n", acmClusterSPBaseURL, err)
 		return
@@ -61,7 +61,7 @@ func doAcmClusterSPRequest(method, path string, body string) (*http.Response, er
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	return httpClient.Do(req)
+	return unauthenticatedClient.Do(req)
 }
 
 func deleteTestCluster(id string) {

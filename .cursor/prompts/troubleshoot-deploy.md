@@ -53,8 +53,12 @@ oc get crd virtualmachines.kubevirt.io
 # Check container status
 podman-compose -f /tmp/dcm-e2e/deploy/compose.yaml ps
 
-# View logs for a failing service
+# View logs for a failing service in the default model
 podman-compose -f /tmp/dcm-e2e/deploy/compose.yaml logs --tail=50 <service-name>
+
+# For an auth-enabled deployment, include the auth override and profile
+podman-compose -f /tmp/dcm-e2e/deploy/compose.yaml -f /tmp/dcm-e2e/deploy/compose.auth.yaml --profile auth ps
+podman-compose -f /tmp/dcm-e2e/deploy/compose.yaml -f /tmp/dcm-e2e/deploy/compose.auth.yaml --profile auth logs --tail=50 keycloak
 
 # Check for port conflicts
 podman ps --format '{{.Ports}}' | grep 8080
@@ -97,8 +101,11 @@ podman-compose -f /tmp/dcm-e2e/deploy/compose.yaml ps
 # Recent container logs (all services)
 podman-compose -f /tmp/dcm-e2e/deploy/compose.yaml logs --tail=20
 
-# Specific service logs
+# Specific service logs in the default model
 podman-compose -f /tmp/dcm-e2e/deploy/compose.yaml logs --tail=50 <service>
+
+# Auth-enabled model, including Keycloak
+podman-compose -f /tmp/dcm-e2e/deploy/compose.yaml -f /tmp/dcm-e2e/deploy/compose.auth.yaml --profile auth logs --tail=50 keycloak
 
 # Container resource usage
 podman stats --no-stream

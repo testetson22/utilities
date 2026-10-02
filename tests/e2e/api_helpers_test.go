@@ -16,17 +16,11 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-
 // runResourceIDCache maps run_id → first resource ID discovered during create.
 // Ginkgo specs are sequential so no locking needed.
 var runResourceIDCache = map[string]string{}
 
 const defaultGatewayURL = "http://localhost:8080/api/v1alpha1"
-
-var (
-	gatewayBaseURL string
-	httpClient     *http.Client
-)
 
 var _ = BeforeSuite(func() {
 	gatewayBaseURL = os.Getenv("DCM_GATEWAY_URL")
@@ -35,7 +29,7 @@ var _ = BeforeSuite(func() {
 	}
 	gatewayBaseURL = strings.TrimRight(gatewayBaseURL, "/")
 
-	httpClient = &http.Client{Timeout: 10 * time.Second}
+	Expect(configureHTTPClients()).To(Succeed())
 
 	GinkgoWriter.Printf("Using gateway URL: %s\n", gatewayBaseURL)
 
@@ -59,6 +53,7 @@ var _ = BeforeSuite(func() {
 	initContainerSP()
 	initAcmClusterSP()
 	initOsacSP()
+	initNetworkSP()
 
 	// Resolve cluster CLI for tests that need kubectl/oc.
 	initKubectl()
@@ -74,22 +69,7 @@ var _ = BeforeSuite(func() {
 // doRequest builds a full URL from a relative path, sends the request, and
 // returns the response. The caller is responsible for closing the body.
 func doRequest(method, path string, body string) (*http.Response, error) {
-	url := gatewayBaseURL + path
-
-	var reqBody io.Reader
-	if body != "" {
-		reqBody = strings.NewReader(body)
-	}
-
-	req, err := http.NewRequest(method, url, reqBody)
-	if err != nil {
-		return nil, err
-	}
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	return httpClient.Do(req)
+	return doRequestWithClient(httpClient, method, path, body)
 }
 
 // readBody reads and closes the response body, returning the raw bytes.

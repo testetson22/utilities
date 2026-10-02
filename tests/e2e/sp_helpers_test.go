@@ -43,7 +43,7 @@ func initContainerSP() {
 		natsURL = defaultNATSURL
 	}
 
-	resp, err := httpClient.Get(containerSPBaseURL + "/containers/health")
+	resp, err := unauthenticatedClient.Get(containerSPBaseURL + "/containers/health")
 	if err != nil {
 		GinkgoWriter.Printf("Container SP not reachable at %s: %v — SP tests will be skipped\n", containerSPBaseURL, err)
 		return
@@ -80,7 +80,7 @@ func doContainerSPRequest(method, path string, body string) (*http.Response, err
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	return httpClient.Do(req)
+	return unauthenticatedClient.Do(req)
 }
 
 // expectRFC9457Problem asserts an RFC 9457 problem+json response (FLPATH-4720/4721)
@@ -97,8 +97,14 @@ func expectRFC9457Problem(resp *http.Response, want problemDetailExpectation) Pr
 	var problem ProblemDetail
 	decodeJSON(resp, &problem)
 
-	Expect(problem.Type).To(Equal(problemTypeBaseURI + want.TypeSuffix))
-	Expect(problem.Title).To(Equal(want.Title))
+	Expect(strings.TrimSpace(problem.Type)).NotTo(BeEmpty())
+	Expect(strings.TrimSpace(problem.Title)).NotTo(BeEmpty())
+	if want.TypeSuffix != "" {
+		Expect(problem.Type).To(Equal(problemTypeBaseURI + want.TypeSuffix))
+	}
+	if want.Title != "" {
+		Expect(problem.Title).To(Equal(want.Title))
+	}
 	Expect(problem.Status).To(Equal(want.Status))
 	if want.Detail != "" {
 		Expect(problem.Detail).To(Equal(want.Detail))
@@ -277,7 +283,7 @@ func (c *NATSCollector) WaitForStatus(instanceID, status string, timeout time.Du
 			}
 		}
 		return false
-	}).WithTimeout(timeout).WithPolling(500 * time.Millisecond).Should(BeTrue(),
+	}).WithTimeout(timeout).WithPolling(500*time.Millisecond).Should(BeTrue(),
 		fmt.Sprintf("timed out waiting for status %q on instance %s", status, instanceID))
 	return matched
 }
@@ -333,6 +339,16 @@ func runKubectl(args ...string) (string, error) {
 	return string(out), err
 }
 
+// runKubectlAllNamespaces executes a cluster-wide kubectl/oc command.
+func runKubectlAllNamespaces(args ...string) (string, error) {
+	cmd := exec.Command(kubectlBin, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		GinkgoWriter.Printf("kubectl %v failed: %s\n", args, string(out))
+	}
+	return string(out), err
+}
+
 // findDeploymentName returns the Kubernetes Deployment name for a DCM
 // container instance. The SP uses GenerateName so the actual Deployment
 // name has a random suffix; this helper resolves it via label selector.
@@ -348,7 +364,6 @@ func findDeploymentName(containerID string) string {
 		"no Deployment found with label %s", selector)
 	return name
 }
-
 
 // --- Podman helpers ------------------------------------------------------- //
 

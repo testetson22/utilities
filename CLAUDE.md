@@ -26,11 +26,11 @@ CI runs ShellCheck on changed `*.sh` files via `.github/workflows/lint.yaml` (on
 
 ## Key Script: `scripts/deploy-dcm.sh`
 
-Deploys the full DCM stack for E2E testing by cloning control-plane (`deploy/compose.yaml`), running `podman-compose up`, and polling health endpoints until all services respond 2xx.
+Deploys the full DCM stack for E2E testing by cloning control-plane and running its selected Compose model. Auth mode also loads `deploy/compose.auth.yaml` with the `auth` profile. The script polls the control-plane health endpoint until it responds 2xx.
 
-**Flow:** clone control-plane → bootstrap `deploy/.env` → `podman-compose up -d` → verify containers running → poll `/api/v1alpha1/health` → collect container versions from Quay.io API → write `dcm-versions.json`.
+**Flow:** clone control-plane → bootstrap `deploy/.env` → run `podman-compose up -d` with the base Compose model and, when auth is enabled, `deploy/compose.auth.yaml` plus the `auth` profile → verify containers running → poll `/api/v1alpha1/health` → collect container versions from Quay.io API → write `dcm-versions.json`.
 
-**Compose credentials:** After clone, the script copies `deploy/.env.example` to `deploy/.env` when missing and upserts DB/auth keys (lab defaults unless overridden by shell env). Control-plane compose reads these via `env_file: .env`. Pass `--auth-enabled` or set `AUTH_DISABLED=false` to add the compose `auth` profile (Keycloak) and write auth credentials into `.env`.
+**Compose credentials:** After clone, the script copies `deploy/.env.example` to `deploy/.env` when missing and upserts DB/auth keys (lab defaults unless overridden by shell env). Control-plane compose reads these via `env_file: .env`. Pass `--auth-enabled` or set `AUTH_DISABLED=false` to load `deploy/compose.auth.yaml`, add the compose `auth` profile (Keycloak), and write auth credentials into `.env`. The authentication overlay is loaded before user and provider compose overrides so later overrides retain precedence.
 
 **Modes:** The script has three mutually exclusive modes:
 - **Deploy** (default): full clone + bring-up + health check. Pass `--cleanup-on-failure` to auto-teardown on error (default leaves partial state for debugging).
@@ -46,12 +46,15 @@ When a non-main version is specified, `--control-plane-branch` is auto-derived t
 
 **Service providers:** Configured via `providers/*.conf` files (see "Provider Registry" below). Enable with `--<label>-service-provider` or `--all-service-providers`.
 
+**Environment agent (embedded SPs):** Pass `--with-environment-agent` with `--agent-embedded-sps LIST` to enable the control-plane `environment-agent` Compose profile in the same bring-up. `LIST` is comma-separated: `container`, `vm`, `cluster`, `storage`, `network`. The script resolves a cluster kubeconfig (required; OCP path, no Kind), writes it to `AGENT_KUBECONFIG_HOST` as an absolute path, upserts agent env into `deploy/.env`, and polls agent health on `http://localhost:${AGENT_PORT}/api/v1alpha1/health` (default port **8081**, override with `--agent-port` / `AGENT_PORT`). Embedded SPs are mutually exclusive with overlapping standalone provider flags (e.g. embedded `vm` vs `--kubevirt-service-provider`). Embedding `cluster` requires `SP_CLUSTER_NAMESPACE` (default `clusters`) and `SP_PULL_SECRET` (or `ACM_CLUSTER_SP_PULL_SECRET`); if unset, pull secret is resolved from `openshift-config/pull-secret`. Prefer this path for network SP (`AGENT_EMBEDDED_SPS=network`); the standalone `--k8s-network-service-provider` flag is legacy. Other useful overrides: `ENVIRONMENT_AGENT_VERSION`, `AGENT_NAME`, `AGENT_ENVIRONMENT`, `AGENT_COST`, `SP_CONTAINER_NAMESPACE`, `SP_VM_NAMESPACE`, `SP_STORAGE_NAMESPACE`, `SP_BASE_DOMAIN`. Teardown auto-detects agent mode from `AGENT_EMBEDDED_SPS` in `deploy/.env`.
+
 **ACM/MCE deployment:** Pass `--deploy-acm` or `--deploy-mce` to install Red Hat ACM or MCE on the OCP cluster before starting the DCM stack. This clones the [acm-cluster-service-provider](https://github.com/dcm-project/acm-cluster-service-provider) repo and runs its `hack/deploy-acm-mce.sh` script. Can take 10–20 minutes. Requires `oc` and `jq`. These are opt-in flags, not enabled by default.
 
-**Cluster authentication:** When any provider is enabled, the script resolves cluster access in priority order: explicit `--kubeconfig`, existing `oc`/`kubectl` session, or `oc login` via `--cluster-api` + `--cluster-password`.
+**Cluster authentication:** When any provider is enabled **or** the environment agent is enabled, the script resolves cluster access in priority order: explicit `--kubeconfig`, existing `oc`/`kubectl` session, or `oc login` via `--cluster-api` + `--cluster-password`.
 
-**Control-plane authentication:** Pass `--auth-enabled` (or set `AUTH_DISABLED=false`) to start Keycloak and enable JWT validation. Use the same flag on `--tear-down` when tearing down an auth-enabled stack. The E2E suite currently supports unauthenticated test runs only.
+**Control-plane authentication:** Pass `--auth-enabled` (or set `AUTH_DISABLED=false`) to load the auth Compose override and profile, start Keycloak, and enable JWT validation. Use the same flag on `--tear-down` when tearing down an auth-enabled stack. The E2E suite currently supports unauthenticated test runs only. Agent + auth together is not the documented default path yet.
 
+**Podman Compose networking:** The script uses `--in-pod false` by default so services run on the Compose bridge network and resolve service names through its DNS. Set `PODMAN_COMPOSE_IN_POD=true` only when pod-mode networking is required by the environment.
 **GitOps reconciliation:** Pass `--gitops` to add the separate published `dcm-gitops` reconciler container. It uses the same PostgreSQL database as control-plane and persists cloned repositories in the Compose `gitops_data` volume. Set `DCM_GITOPS_VERSION` to pin only that image, or use `--version` to pin all DCM images.
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
@@ -93,9 +96,11 @@ Service providers are defined declaratively in `providers/*.conf` files. Each co
 
 **To add a new provider:** drop a `.conf` file in `providers/` and (if needed) add a validation hook function in `deploy-dcm.sh`. No other changes to the deploy script are required — flags, usage, arg parsing, and env exports are all generated from the registry.
 
-Current providers: `kubevirt`, `k8s-container`, `k8s-storage`, `acm-cluster`, `three-tier-app-demo`, `three-tier-app-demo-2`, `three-tier-app-demo-3`.
+Current providers: `kubevirt`, `k8s-container`, `k8s-storage`, `k8s-network`, `acm-cluster`, `three-tier-app-demo`, `three-tier-app-demo-2`, `three-tier-app-demo-3`.
 
-Host ports published for direct SP access (compose overrides): KubeVirt **8081**, k8s-container **8082**, ACM cluster **8083**, three-tier **8084**–**8086**, k8s-container-2/3 **8087**–**8088**, k8s-storage **8089**.
+Host ports published for direct SP access (compose overrides): KubeVirt **8081**, k8s-container **8082**, ACM cluster **8083**, three-tier **8084**–**8086**, k8s-container-2/3 **8087**–**8088**, k8s-storage **8089**. Environment-agent (via `--with-environment-agent`) also publishes **8081** by default — combining with standalone KubeVirt requires `--agent-port` ≠ 8081.
+
+**k8s-network:** Embed via `--with-environment-agent --agent-embedded-sps network` ([environment-agent](https://github.com/dcm-project/environment-agent)). Do not rely on the legacy utilities `--k8s-network-service-provider` / Quay standalone image path ([FLPATH-4881](https://redhat.atlassian.net/browse/FLPATH-4881) obsolete). See `test-plans/FLPATH-3227-k8s-network-sp.md`.
 
 ### Script Structure
 
@@ -345,11 +350,13 @@ CLI tests are skipped (not failed) if no binary is available.
 - `DCM_CONTAINER_SP_URL` env var overrides the container SP endpoint (default: `http://localhost:8082/api/v1alpha1`)
 - `DCM_STORAGE_SP_URL` env var overrides the storage SP endpoint (default: `http://localhost:8089/api/v1alpha1`)
 - `DCM_ACM_CLUSTER_SP_URL` env var overrides the ACM cluster SP endpoint (default: `http://localhost:8083/api/v1alpha1`)
+- `DCM_AGENT_URL` env var overrides the environment-agent endpoint (default: `http://localhost:8081/api/v1alpha1`)
+- `DCM_NETWORK_SP_ENABLED=true` requires the embedded Network SP. The suite waits up to 30 seconds for the agent and provider to become ready, then fails if they do not. When unset or `false`, Network SP specs skip immediately.
 - `DCM_NATS_URL` env var overrides the NATS server (default: `nats://localhost:4222`)
 - `DCM_CLI_PATH` env var specifies the CLI binary path
 - `DCM_CONTAINER_PROVIDER_NAME` env var overrides which container provider to target in core platform tests (default: first `service_type=container` provider found)
-- Ginkgo labels (`smoke`, `cli`, `sp`, `container`, `acm-cluster`, `nats`, `cluster`, `disruptive`, `core`, `platform`, `rehydration`, `happy-path`, `failover`, `policy`, `negative`, `integrity`, `contract`) enable selective test runs via `--label-filter`
-- SP tests skip gracefully if the container SP or ACM cluster SP isn't reachable (no hard failure)
+- Ginkgo labels (`smoke`, `cli`, `sp`, `container`, `network`, `acm-cluster`, `nats`, `cluster`, `disruptive`, `core`, `platform`, `rehydration`, `happy-path`, `failover`, `policy`, `negative`, `integrity`, `contract`) enable selective test runs via `--label-filter`
+- Container and ACM cluster SP tests skip gracefully if their SP is not reachable. Network SP tests skip only while `DCM_NETWORK_SP_ENABLED` is not enabled; an enabled Network SP is required to become ready.
 - Cluster tests skip gracefully if `kubectl`/`oc` is unavailable or the cluster is unreachable
 - Disruptive tests skip if `podman` is unavailable; exclude from normal runs with `--label-filter '!disruptive'`
 

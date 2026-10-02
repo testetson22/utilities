@@ -67,6 +67,12 @@ func runDCM(args ...string) (stdout string, stderr string, exitCode int) {
 	fullArgs = append(fullArgs, args...)
 
 	cmd := exec.Command(dcmBinaryPath, fullArgs...)
+	cmd.Env = os.Environ()
+	if authEnabled {
+		token, err := authTokenForCLI()
+		Expect(err).NotTo(HaveOccurred())
+		cmd.Env = append(cmd.Env, "DCM_TOKEN="+token)
+	}
 
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf

@@ -117,7 +117,7 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 				var getBody map[string]interface{}
 				decodeJSON(resp, &getBody)
 				return getBody["service"]
-			}).WithTimeout(15 * time.Second).WithPolling(2 * time.Second).ShouldNot(BeNil(),
+			}).WithTimeout(15*time.Second).WithPolling(2*time.Second).ShouldNot(BeNil(),
 				"service field should be populated on GET after Service creation")
 		})
 
@@ -134,7 +134,7 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 				decodeJSON(resp, &body)
 				s, _ := body["status"].(string)
 				return s
-			}).WithTimeout(120 * time.Second).WithPolling(3 * time.Second).Should(Equal("RUNNING"),
+			}).WithTimeout(120*time.Second).WithPolling(3*time.Second).Should(Equal("RUNNING"),
 				"container should reach RUNNING status")
 		})
 
@@ -253,7 +253,7 @@ var _ = Describe("Container SP API", Label("sp", "container"), func() {
 			Expect(err).NotTo(HaveOccurred())
 			req.Header.Set("Content-Type", "text/plain")
 
-			resp, err := httpClient.Do(req)
+			resp, err := unauthenticatedClient.Do(req)
 			Expect(err).NotTo(HaveOccurred())
 			resp.Body.Close()
 			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))

@@ -28,6 +28,8 @@ Options:
   --skip-teardown              Leave the stack running after tests
   --skip-cli                   Skip CLI binary resolution (CLI tests will be skipped)
   --dcm-cli-path PATH          Path to pre-built dcm binary (skips resolution)
+  --auth-enabled               Enable RHBK/OIDC bearer authentication for API and CLI tests
+  --auth-issuer-url URL        OIDC issuer URL (also accepted as --keycloak-url)
   --gateway-url URL            Override DCM_GATEWAY_URL (default: http://localhost:8080/api/v1alpha1)
   --label-filter EXPR          Ginkgo label filter (e.g. "smoke", "cli")
   --junit-report FILE          Write JUnit XML report to FILE
@@ -70,6 +72,22 @@ Environment variables:
   DCM_ENVIRONMENT_AGENT_URL  Environment agent API URL (default: http://localhost:8090/api/v1alpha1)
   DCM_NATS_URL               NATS URL for event tests (default: nats://localhost:4222)
   DCM_GATEWAY_URL            Control plane API URL (default: http://localhost:8080/api/v1alpha1)
+  DCM_AGENT_URL            Environment-agent API URL (default: http://localhost:8081/api/v1alpha1)
+  DCM_NETWORK_SP_ENABLED   Require the embedded Network SP (default: false)
+  DCM_CONTAINER_SP_URL     Container SP direct URL (default: http://localhost:8082/api/v1alpha1)
+  DCM_STORAGE_SP_URL       Storage SP direct URL (default: http://localhost:8089/api/v1alpha1)
+  DCM_ACM_CLUSTER_SP_URL   ACM Cluster SP direct URL (default: http://localhost:8083/api/v1alpha1)
+  DCM_KUBEVIRT_SP_URL      KubeVirt SP direct URL (default: http://localhost:8081/api/v1alpha1)
+  DCM_NATS_URL             NATS URL for event tests (default: nats://localhost:4222)
+  DCM_GATEWAY_URL          Control plane API URL (default: http://localhost:8080/api/v1alpha1)
+  DCM_AUTH_ENABLED         Enable OIDC bearer authentication (default: false)
+  DCM_AUTH_ISSUER_URL      OIDC issuer URL (required when authentication is enabled)
+  DCM_AUTH_CLIENT_ID       OIDC client ID (default: dcm-proxy)
+  DCM_AUTH_CLIENT_SECRET   OIDC client secret
+  DCM_AUTH_USERNAME        OIDC user name for password-grant tokens
+  DCM_AUTH_PASSWORD        OIDC password for password-grant tokens
+  DCM_AUTH_TOKEN           Optional static bearer token (avoids password grant)
+  DCM_AUTH_CA_FILE         Optional CA bundle for the OIDC issuer
 
 CLI binary resolution order:
   1. --dcm-cli-path flag or DCM_CLI_PATH env var
@@ -164,6 +182,8 @@ SKIP_CLI=false
 DCM_CLI_PATH="${DCM_CLI_PATH:-}"
 CLI_VERSION="${CLI_VERSION:-main}"
 GATEWAY_URL=""
+AUTH_ENABLED="${DCM_AUTH_ENABLED:-false}"
+AUTH_ISSUER_URL="${DCM_AUTH_ISSUER_URL:-}"
 LABEL_FILTER=""
 JUNIT_REPORT=""
 DEPLOY_ARGS=()
@@ -187,6 +207,13 @@ while [[ $# -gt 0 ]]; do
             shift ;;
         --dcm-cli-path)
             DCM_CLI_PATH="$2"
+            shift 2 ;;
+        --auth-enabled)
+            AUTH_ENABLED=true
+            shift ;;
+        --auth-issuer-url|--keycloak-url)
+            AUTH_ENABLED=true
+            AUTH_ISSUER_URL="$2"
             shift 2 ;;
         --cli-version)
             CLI_VERSION="$2"
@@ -268,6 +295,21 @@ done
 if ! command -v go &>/dev/null; then
     err "Go toolchain not found — install Go before running tests"
     exit 1
+fi
+
+if [[ "${AUTH_ENABLED}" == "true" ]]; then
+    if [[ -z "${AUTH_ISSUER_URL}" ]]; then
+        err "--auth-enabled requires --auth-issuer-url or DCM_AUTH_ISSUER_URL"
+        exit 1
+    fi
+    export DCM_AUTH_ENABLED=true
+    export DCM_AUTH_ISSUER_URL="${AUTH_ISSUER_URL}"
+    export AUTH_ISSUER_URL="${AUTH_ISSUER_URL}"
+    DEPLOY_ARGS+=(--auth-enabled)
+    info "DCM authentication enabled for E2E requests"
+else
+    export DCM_AUTH_ENABLED=false
+    info "DCM authentication disabled for E2E requests"
 fi
 
 # Deploy the stack.

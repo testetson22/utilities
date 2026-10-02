@@ -13,7 +13,7 @@ See `CLAUDE.md` → "Key Script: scripts/deploy-dcm.sh" for the full description
 - New functions go above the argument parsing section
 - New flags need entries in both `usage()` and the `while/case` loop
 - Add corresponding environment variable overrides where appropriate
-- Compose variable names (`KUBEVIRT_KUBECONFIG`, `K8S_CONTAINER_SP_KUBECONFIG`, etc.) are owned by control-plane's `deploy/compose.yaml` — see the contract comment at the top of the script
+- Compose variable names (`KUBEVIRT_KUBECONFIG`, `K8S_CONTAINER_SP_KUBECONFIG`, etc.) are owned by control-plane Compose files: general settings in `deploy/compose.yaml`, auth-only settings in `deploy/compose.auth.yaml` — see the contract comment at the top of the script
 - Run `shellcheck scripts/deploy-dcm.sh` after changes
 
 ## Podman / Compose
@@ -25,6 +25,8 @@ podman-compose -f compose.yaml logs --tail=50 <service>
 
 # Status snapshots
 podman-compose -f compose.yaml ps
+# Auth-enabled model: include the auth override and profile
+podman-compose -f compose.yaml -f compose.auth.yaml --profile auth ps
 podman ps --format 'table {{.Names}}\t{{.Status}}'
 ```
 

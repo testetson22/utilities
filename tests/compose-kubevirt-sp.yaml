@@ -1,6 +1,8 @@
 # Compose override for E2E testing: publishes the KubeVirt SP port to the host.
 # Injected automatically by deploy-dcm.sh via the provider registry
 # (providers/kubevirt.conf → COMPOSE_OVERRIDE).
+# Host port 8081 is also the default environment-agent API port (DEFAULT_AGENT_PORT);
+# combining standalone KubeVirt with --with-environment-agent requires --agent-port ≠ 8081.
 
 services:
   kubevirt-service-provider:

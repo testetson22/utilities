@@ -1,0 +1,30 @@
+# LEGACY compose override for standalone k8s-network-service-provider.
+# Network is now embedded in environment-agent (AGENT_EMBEDDED_SPS=network).
+# Prefer agent deploy; Quay standalone image is not a QE dependency (FLPATH-4881 Obsolete).
+# Injected by deploy-dcm.sh via providers/k8s-network.conf when the legacy flag is used.
+#
+# Host port 8090 — only if using this legacy path.
+
+services:
+  k8s-network-service-provider:
+    image: quay.io/dcm-project/k8s-network-service-provider:${K8S_NETWORK_SERVICE_PROVIDER_VERSION:-main}
+    pull_policy: always
+    environment:
+      SP_SERVER_ADDRESS: ":8080"
+      SP_NAME: ${K8S_NETWORK_SP_NAME:-k8s-network-sp}
+      SP_ENDPOINT: "http://k8s-network-service-provider:8080"
+      DCM_REGISTRATION_URL: "http://control-plane:8080/api/v1alpha1"
+      SP_NATS_URL: "nats://nats:4222"
+      SP_K8S_NAMESPACE: ${K8S_NETWORK_SP_NAMESPACE:-default}
+      SP_K8S_KUBECONFIG: /kubeconfig
+    expose:
+      - "8080"
+    ports:
+      - "8090:8080"
+    volumes:
+      - ${K8S_NETWORK_SP_KUBECONFIG:-~/.kube/config}:/kubeconfig:ro,z
+    depends_on:
+      control-plane:
+        condition: service_started
+      nats:
+        condition: service_started

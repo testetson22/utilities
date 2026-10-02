@@ -45,6 +45,19 @@ When adding a new service provider, add `sp_{provider}_{concern}_test.go` (e.g. 
 | `DCM_NATS_URL` | `nats://localhost:4222` | NATS for status events |
 | `DCM_CLI_PATH` | (auto-resolved) | CLI binary path |
 | `DCM_CONTAINER_PROVIDER_NAME` | (first container provider) | Target a specific container provider in core platform tests |
+| `DCM_AUTH_ENABLED` | `false` | Enable OIDC bearer authentication for API and CLI requests |
+| `DCM_AUTH_ISSUER_URL` | (none) | OIDC issuer URL; required when authentication is enabled |
+| `DCM_AUTH_CLIENT_ID` | `dcm-proxy` | OIDC client ID; set explicitly when the deployment uses another client |
+| `DCM_AUTH_CLIENT_SECRET` | (none) | Client secret for password-grant tokens |
+| `DCM_AUTH_USERNAME` | (none) | OIDC user for password-grant tokens |
+| `DCM_AUTH_PASSWORD` | (none) | OIDC password for password-grant tokens |
+| `DCM_AUTH_TOKEN` | (none) | Optional static bearer token; avoids the password grant |
+| `DCM_AUTH_CA_FILE` | (none) | Optional CA bundle for the OIDC issuer |
+
+Authentication can also be enabled with `tests/run-e2e.sh --auth-enabled --auth-issuer-url URL`.
+When enabled, provide either `DCM_AUTH_TOKEN` or the client secret, username, and password.
+The harness uses the authenticated client only for control-plane requests; direct service-provider
+requests use the unauthenticated client until provider-specific authentication is supported.
 
 ## Code Quality Patterns
 

@@ -38,10 +38,10 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 
 `scripts/deploy-dcm.sh` automates the full DCM stack lifecycle for E2E testing:
 
-1. Clones the [control-plane](https://github.com/dcm-project/control-plane) repo (`deploy/compose.yaml`)
+1. Clones the [control-plane](https://github.com/dcm-project/control-plane) repo and uses `deploy/compose.yaml`; auth mode also loads `deploy/compose.auth.yaml` with the `auth` profile
 2. Bootstraps `deploy/.env` from `deploy/.env.example` (compose credentials; see control-plane `deploy/RUN.md`)
-3. Starts all services with `podman-compose up`
-4. Polls health endpoints until every service responds 2xx
+3. Starts the selected Compose model with `podman-compose up`
+4. Polls the control-plane health endpoint until it responds 2xx
 5. Resolves running container images to git commit SHAs via the Quay.io API
 
 ### Prerequisites
@@ -79,18 +79,56 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 # 8. Deploy ACM cluster provider (install ACM first if needed)
 ./scripts/deploy-dcm.sh --acm-cluster-service-provider --deploy-acm --kubeconfig ~/.kube/config
 
-# 9. Deploy with authentication enabled (Keycloak + JWT validation)
+# 9. Deploy with auth override and profile (Keycloak + JWT validation)
 ./scripts/deploy-dcm.sh --auth-enabled
 
 # 10. Deploy with the GitOps reconciliation container
 ./scripts/deploy-dcm.sh --gitops
 
-# 11. Tear down an authenticated stack when done
+# 11. Deploy control-plane + environment-agent with embedded SPs (OCP kubeconfig)
+./scripts/deploy-dcm.sh --with-environment-agent \
+    --agent-embedded-sps container,vm \
+    --kubeconfig ~/.kube/config
+
+# 12. Embed ACM cluster SP via the agent (pull secret resolved from cluster if unset)
+./scripts/deploy-dcm.sh --with-environment-agent \
+    --agent-embedded-sps cluster \
+    --deploy-acm \
+    --kubeconfig ~/.kube/config
+
+# 13. Tear down an authenticated stack when done
 ./scripts/deploy-dcm.sh --auth-enabled --tear-down
 
 # Use --gitops during teardown when the reconciler was enabled
 ./scripts/deploy-dcm.sh --gitops --tear-down
+
+# Tear down an agent-enabled stack (script detects AGENT_EMBEDDED_SPS in deploy/.env)
+./scripts/deploy-dcm.sh --tear-down
 ```
+
+### Environment agent (embedded SPs)
+
+Prefer the [environment-agent](https://github.com/dcm-project/environment-agent)
+compose profile when you want SPs inside one agent process instead of standalone
+provider containers. Bring-up is a single `podman-compose` line with
+`--profile environment-agent`.
+
+| Item | Detail |
+|------|--------|
+| Flags | `--with-environment-agent` and `--agent-embedded-sps LIST` (required together) |
+| Embedded list | Comma-separated: `container`, `vm`, `cluster`, `storage`, `network` |
+| Kubeconfig | Resolved like other providers (`--kubeconfig` / `KUBECONFIG` / session / `oc login`); written to `AGENT_KUBECONFIG_HOST` for the compose bind mount (absolute path; OCP path — no Kind) |
+| Agent port | Host API on `--agent-port` / `AGENT_PORT` (default **8081**); same port as standalone KubeVirt SP — combining with `--kubevirt-service-provider` requires a distinct `--agent-port` |
+| Health | After CP `/api/v1alpha1/health`, polls agent `http://localhost:${AGENT_PORT}/api/v1alpha1/health` |
+| Mutual exclusion | An embedded SP cannot be paired with its overlapping standalone flag (e.g. embedded `container` vs `--k8s-container-service-provider`) |
+| Cluster embed | `SP_CLUSTER_NAMESPACE` (default `clusters`) and `SP_PULL_SECRET` (or `ACM_CLUSTER_SP_PULL_SECRET`); if unset, pull secret is read from `openshift-config/pull-secret` |
+
+Useful overrides: `AGENT_EMBEDDED_SPS`, `AGENT_PORT`, `ENVIRONMENT_AGENT_VERSION`, `AGENT_NAME`, `AGENT_ENVIRONMENT`, `AGENT_COST`, `SP_CONTAINER_NAMESPACE`, `SP_VM_NAMESPACE`, `SP_STORAGE_NAMESPACE`, `SP_CLUSTER_NAMESPACE`, `SP_PULL_SECRET`, `SP_BASE_DOMAIN`.
+
+> **Network SP:** embed with `--agent-embedded-sps network` (see agent `deploy/DEPLOY.md`).
+> The utilities `--k8s-network-service-provider` flag is **legacy** (standalone Quay
+> image path; [FLPATH-4881](https://redhat.atlassian.net/browse/FLPATH-4881) obsolete).
+> QE plan: [test-plans/FLPATH-3227-k8s-network-sp.md](test-plans/FLPATH-3227-k8s-network-sp.md).
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
 
@@ -131,6 +169,15 @@ Supported simulator scenarios include `ready`, `failed`, `backend-unavailable`,
 `backend-timeout`, `delete-delayed`, and `vm-running`. The simulator validates the SP
 contract only; it does not replace Agent, BMFO, AAP, BMC, or HostedCluster testing.
 
+### Podman Compose networking
+
+`deploy-dcm.sh` disables Podman Compose pod mode by default so services use the
+Compose bridge network and can resolve each other by service name. To opt into pod
+mode for a compatible environment, set the override explicitly:
+
+```bash
+PODMAN_COMPOSE_IN_POD=true ./scripts/deploy-dcm.sh
+```
 The optional `--gitops` flag adds the published `quay.io/dcm-project/dcm-gitops` container
 to the Compose stack. The reconciler shares the control-plane PostgreSQL database and
 stores cloned repositories in a named `gitops_data` volume. Set `DCM_GITOPS_VERSION` to
@@ -190,10 +237,32 @@ make help
 | `DCM_GATEWAY_URL` | `http://localhost:8080/api/v1alpha1` | Control plane API base URL |
 | `DCM_CONTAINER_SP_URL` | `http://localhost:8082/api/v1alpha1` | Container SP direct URL (requires published port) |
 | `DCM_STORAGE_SP_URL` | `http://localhost:8089/api/v1alpha1` | Storage SP direct URL (requires published port) |
+| `DCM_AGENT_URL` | `http://localhost:8081/api/v1alpha1` | Environment-agent API (embedded network via `AGENT_EMBEDDED_SPS=network`) |
+| `DCM_NETWORK_SP_ENABLED` | `false` | Require the embedded Network SP; when `false`, Network specs are skipped |
 | `DCM_ACM_CLUSTER_SP_URL` | `http://localhost:8083/api/v1alpha1` | ACM Cluster SP direct URL (requires published port) |
 | `DCM_NATS_URL` | `nats://localhost:4222` | NATS server URL for status event tests |
 | `DCM_CLI_PATH` | (auto-resolved) | Path to `dcm` CLI binary |
+| `DCM_NETWORK_LB_MODE` | (auto-detect MetalLB) | Network E2E LoadBalancer mode: `none`, `metallb`, or `cloud` |
 | `JUNIT_REPORT` | (none) | JUnit XML report filename (e.g. `make test-e2e JUNIT_REPORT=results.xml`) |
+| `DCM_AUTH_ENABLED` | `false` | Enable OIDC bearer authentication for API and CLI requests |
+| `DCM_AUTH_ISSUER_URL` | (none) | OIDC issuer URL; required when authentication is enabled |
+| `DCM_AUTH_CLIENT_ID` | `dcm-proxy` | OIDC client ID |
+| `DCM_AUTH_CLIENT_SECRET` | (none) | OIDC client secret for password-grant tokens |
+| `DCM_AUTH_USERNAME` | (none) | OIDC user for password-grant tokens |
+| `DCM_AUTH_PASSWORD` | (none) | OIDC password for password-grant tokens |
+| `DCM_AUTH_TOKEN` | (none) | Optional static bearer token; avoids the password grant |
+| `DCM_AUTH_CA_FILE` | (none) | Optional CA bundle for the OIDC issuer |
+
+Set `DCM_NETWORK_SP_ENABLED=true` only after starting the environment-agent
+profile with `AGENT_EMBEDDED_SPS=network` and publishing its API port. When
+enabled, Network specifications wait up to 30 seconds for a reachable agent at
+`DCM_AGENT_URL` and an embedded `network` provider with status `Ready`; they
+fail if it does not become ready. Otherwise, Network specifications skip
+immediately.
+
+The network NodePort tests select an unused port after listing Services across
+the cluster. The test identity needs permission to list Services in all
+namespaces.
 
 ### Test Harness Flags
 
@@ -211,12 +280,37 @@ The test harness (`tests/run-e2e.sh`) supports additional flags for fine-grained
 # Service provider tests
 ./tests/run-e2e.sh --k8s-container-service-provider --cluster-api https://api.example.com:6443
 ./tests/run-e2e.sh --k8s-storage-service-provider --kubeconfig ~/.kube/config
+# Network (embedded environment agent; requires kubectl/oc access to the target cluster)
+./tests/run-e2e.sh --skip-deploy --label-filter "sp && network"
 ./tests/run-e2e.sh --skip-deploy --label-filter "sp && container"
+
+# Authentication-disabled mode (the default)
+./tests/run-e2e.sh --skip-deploy --skip-cli --label-filter smoke
+
+# Authentication-enabled mode against an already deployed RHBK/DCM stack
+DCM_AUTH_CLIENT_ID=dcm-proxy \
+DCM_AUTH_CLIENT_SECRET="$RHBK_CLIENT_SECRET" \
+DCM_AUTH_USERNAME=testuser1 \
+DCM_AUTH_PASSWORD="$RHBK_TEST_PASSWORD" \
+./tests/run-e2e.sh --skip-deploy --skip-cli \
+  --auth-issuer-url https://keycloak.example/realms/dcm
 
 # ACM cluster SP tests
 ./tests/run-e2e.sh --acm-cluster-service-provider --kubeconfig ~/.kube/config
 ./tests/run-e2e.sh --skip-deploy --label-filter "sp && acm-cluster"
 ```
+
+The same API and CLI tests run in both modes. Authentication-disabled mode is
+the default and sends requests without a bearer token. Authentication-enabled
+mode obtains a token from the configured OIDC issuer and uses it for API and
+CLI requests. The `auth` label contains authentication boundary checks; those
+checks are skipped when authentication is disabled. Keep credentials in the
+environment or CI secret store; do not commit them.
+
+Service-provider authentication coverage is separate from the shared suite.
+The existing provider tests remain available in authentication-disabled mode.
+Provider authentication depends on FLPATH-4622 and should be enabled in the
+authenticated run after that support is available.
 
 ### Unit Tests
 

@@ -12,6 +12,8 @@ on:
       - 'tests/test-osac-ca-validation.sh'
       - 'tests/test-osac-deploy-wiring.sh'
       - 'tests/compose-osac-sp-tls.yaml'
+      - 'tests/e2e/**'
+      - 'tests/fixtures/podman-compose-networking.yaml'
       - 'providers/*.conf'
       - '.github/workflows/validate-scripts.yaml'
   workflow_dispatch:
@@ -103,6 +105,7 @@ jobs:
             --expect-contains "--compose-file" "compose-file flag" \
             --expect-contains "--gitops" "gitops flag" \
             --expect-contains "--auth-enabled" "auth-enabled flag" \
+            --expect-contains "PODMAN_COMPOSE_IN_POD" "podman-compose networking setting" \
             --expect-contains "--cleanup-on-failure" "cleanup-on-failure flag" \
             --expect-contains "--running-versions" "running-versions flag" \
             --expect-contains "--tear-down" "tear-down flag" \
@@ -163,6 +166,10 @@ jobs:
     name: OSAC CA validation
     runs-on: ubuntu-latest
     timeout-minutes: 2
+  validate-podman-compose-networking:
+    name: podman-compose networking
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v6
@@ -187,6 +194,46 @@ jobs:
 
       - name: Validate OSAC issuer normalization and single-command wiring
         run: bash tests/test-osac-deploy-wiring.sh
+
+  validate-podman-compose-networking:
+    name: podman-compose networking
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Podman Compose 1.6.0
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+          python3 -m pip install --user podman-compose==1.6.0
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify bridge-network service discovery
+        run: |
+          set -euo pipefail
+
+          project="podman-compose-networking-${GITHUB_RUN_ID}"
+          compose_file="tests/fixtures/podman-compose-networking.yaml"
+          compose_args=(--in-pod false --project-name "${project}" --file "${compose_file}")
+
+          cleanup() {
+            podman-compose "${compose_args[@]}" down -v || true
+          }
+          trap cleanup EXIT
+
+          podman-compose --version | grep -F 'podman-compose version 1.6.0'
+          podman-compose "${compose_args[@]}" up -d
+
+          if podman pod ps --filter "name=pod_${project}" --format '{{.Name}}' | grep -q .; then
+            echo "podman-compose created a pod despite --in-pod false"
+            exit 1
+          fi
+
+           probe_id="$(podman ps -q --filter "label=com.docker.compose.project=${project}" --filter 'label=com.docker.compose.service=probe')"
+           test -n "${probe_id}"
+           test "$(podman exec "${probe_id}" wget -q -O - http://database:8080/)" = "database"
 
   validate-e2e-harness:
     name: run-e2e.sh flags
@@ -270,7 +317,9 @@ jobs:
             --expect-contains "--dcm-cli-path" "dcm-cli-path flag" \
             --expect-contains "--gateway-url" "gateway-url flag" \
             --expect-contains "--label-filter" "label-filter flag" \
-            --expect-contains "--junit-report" "junit-report flag"
+            --expect-contains "--junit-report" "junit-report flag" \
+            --expect-contains "--auth-enabled" "auth-enabled flag" \
+            --expect-contains "--auth-issuer-url" "auth-issuer-url flag"
 
           run_case "--help contains SP passthrough flags" \
             --expect-exit "--help" 0 \
@@ -284,7 +333,9 @@ jobs:
             --expect-exit "--help" 0 \
             --expect-contains "DCM_CONTAINER_SP_URL" "container SP URL env var" \
             --expect-contains "DCM_ACM_CLUSTER_SP_URL" "ACM cluster SP URL env var" \
-            --expect-contains "DCM_NATS_URL" "NATS URL env var"
+            --expect-contains "DCM_NATS_URL" "NATS URL env var" \
+            --expect-contains "DCM_AUTH_ENABLED" "auth enabled env var" \
+            --expect-contains "DCM_AUTH_ISSUER_URL" "auth issuer URL env var"
 
           # --- Unknown flag handling --------------------------------------------
 

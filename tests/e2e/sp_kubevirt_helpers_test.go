@@ -35,7 +35,7 @@ func initKubevirtSP() {
 		}
 
 		// Health lives under /vms/health (same pattern as container/acm SPs)
-		resp, err := kubevirtHTTPClient().Get(kubevirtSPURL + "/vms/health")
+		resp, err := unauthenticatedClient.Get(kubevirtSPURL + "/vms/health")
 		if err != nil || resp.StatusCode != http.StatusOK {
 			GinkgoWriter.Printf("KubeVirt SP not reachable at %s (tests will skip)\n", kubevirtSPURL)
 			kubevirtSPSkipped = true
@@ -99,25 +99,17 @@ func doRequestToURL(url, method, payload string) (*http.Response, error) {
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	return kubevirtHTTPClient().Do(req)
-}
-
-// kubevirtHTTPClient reuses the suite client (10s timeout) when available.
-func kubevirtHTTPClient() *http.Client {
-	if httpClient != nil {
-		return httpClient
-	}
-	return &http.Client{Timeout: 10 * time.Second}
+	return unauthenticatedClient.Do(req)
 }
 
 // VMSpec represents a minimal VM specification for testing
 type VMSpec struct {
-	ServiceType string      `json:"service_type"`
-	Metadata    VMMetadata  `json:"metadata"`
-	GuestOS     VMGuestOS   `json:"guest_os"`
-	Vcpu        VMVcpu      `json:"vcpu"`
-	Memory      VMMemory    `json:"memory"`
-	Storage     VMStorage   `json:"storage"`
+	ServiceType string     `json:"service_type"`
+	Metadata    VMMetadata `json:"metadata"`
+	GuestOS     VMGuestOS  `json:"guest_os"`
+	Vcpu        VMVcpu     `json:"vcpu"`
+	Memory      VMMemory   `json:"memory"`
+	Storage     VMStorage  `json:"storage"`
 }
 
 type VMMetadata struct {

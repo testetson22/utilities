@@ -19,7 +19,7 @@ Stop and clean up a running DCM deployment.
 ./scripts/deploy-dcm.sh --auth-enabled --tear-down
 ```
 
-Use the same authentication setting used during deployment so the auth compose profile, including Keycloak, is included in teardown.
+Use the same authentication setting used during deployment so teardown loads `deploy/compose.auth.yaml` with the `auth` profile and includes Keycloak.
 
 ## What Happens
 

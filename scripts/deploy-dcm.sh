@@ -13,6 +13,9 @@ readonly DEFAULT_CONTROL_PLANE_REPO="https://github.com/dcm-project/control-plan
 readonly DEFAULT_CONTROL_PLANE_BRANCH="main"
 readonly DEFAULT_CONTROL_PLANE_TMP_DIR="/tmp/dcm-e2e"
 export COMPOSE_PROJECT_NAME="dcm-e2e"
+# Use a Compose network with service-name DNS. Podman Compose pod mode can
+# isolate services from each other when the pod has no shared network namespace.
+export PODMAN_COMPOSE_IN_POD="${PODMAN_COMPOSE_IN_POD:-false}"
 readonly CONTROL_PLANE_PORT="8080"
 readonly HEALTH_TIMEOUT_SECONDS=90
 readonly HEALTH_POLL_INTERVAL=5
@@ -24,18 +27,28 @@ readonly HEALTH_ENDPOINTS=(
 readonly DEFAULT_ACM_CLUSTER_SP_REPO="https://github.com/dcm-project/acm-cluster-service-provider.git"
 readonly DEFAULT_ACM_CLUSTER_SP_BRANCH="main"
 
+podman_compose() {
+    command podman-compose --in-pod "${PODMAN_COMPOSE_IN_POD}" "$@"
+}
+
 readonly QUAY_VERSION_REPO="control-plane"
 readonly VERSION_ENV_VARS=(
     CONTROL_PLANE_VERSION
     DCM_GITOPS_VERSION
     DCM_UI_VERSION
+    ENVIRONMENT_AGENT_VERSION
     KUBEVIRT_SERVICE_PROVIDER_VERSION
     K8S_CONTAINER_SERVICE_PROVIDER_VERSION
     K8S_STORAGE_SERVICE_PROVIDER_VERSION
+    K8S_NETWORK_SERVICE_PROVIDER_VERSION
     ACM_CLUSTER_SERVICE_PROVIDER_VERSION
     THREE_TIER_DEMO_SERVICE_PROVIDER_VERSION
     ENVIRONMENT_AGENT_VERSION
     OSAC_SERVICE_PROVIDER_VERSION
+)
+readonly DEFAULT_AGENT_PORT="8081"  # same host port as standalone kubevirt SP (compose-kubevirt-sp.yaml); agent + kubevirt requires a distinct --agent-port
+readonly AGENT_HEALTH_ENDPOINTS=(
+    "/api/v1alpha1/health"
 )
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -126,6 +139,9 @@ Options:
   --control-plane-dir PATH       Directory to clone control-plane into (default: ${DEFAULT_CONTROL_PLANE_TMP_DIR})
   --all-service-providers        Enable all available service providers
   --gitops                       Enable the dcm-gitops reconciliation container
+  --with-environment-agent       Enable the environment-agent compose profile (embedded SPs)
+  --agent-embedded-sps LIST      Comma-separated embedded SPs (required with agent; e.g. container,vm)
+  --agent-port PORT              Host port for environment-agent API (default: ${DEFAULT_AGENT_PORT})
 EOF
 
     # Provider flags (generated from registry)
@@ -149,7 +165,7 @@ EOF
                                   simulator uses the deterministic upstream-backed gRPC fixture.
   --acm-cluster-sp-repo URL      Git repo for acm-cluster-service-provider (default: ${DEFAULT_ACM_CLUSTER_SP_REPO})
   --acm-cluster-sp-branch REF    Branch to clone (default: ${DEFAULT_ACM_CLUSTER_SP_BRANCH})
-  --kubeconfig PATH              Path to kubeconfig file (auto-detected if omitted)
+  --kubeconfig PATH              Path to kubeconfig file (auto-detected if omitted; mounted into the agent)
 EOF
 
     # Namespace flags (generated from registry — only for providers that define one)
@@ -164,7 +180,7 @@ EOF
   --cluster-username USER        Username for oc login (default: kubeadmin)
   --cluster-password PASS        Password for oc login
   --compose-file PATH            Additional compose file to merge (repeatable, e.g. port overrides)
-  --auth-enabled                 Enable authentication (Keycloak + JWT validation; adds compose profile auth)
+  --auth-enabled                 Enable authentication (loads auth Compose override and profile; starts Keycloak)
   --cleanup-on-failure           Tear down the stack automatically if deployment fails (default: leave for debugging)
   --running-versions             Print versions of all running containers and write dcm-versions.json
   --tear-down                    Stop the stack, remove volumes, and clean the deploy directory
@@ -187,6 +203,7 @@ Environment variables (flags take precedence):
   OPENSHIFT_USERNAME        Same as --cluster-username (default: kubeadmin)
   OPENSHIFT_PASSWORD        Same as --cluster-password
   AUTH_DISABLED             Set to 'false' to enable auth (same effect as --auth-enabled)
+  PODMAN_COMPOSE_IN_POD     Podman Compose pod mode (default: false)
 EOF
 
     # Provider namespace env vars (generated from registry — only for providers that define one)
@@ -293,7 +310,7 @@ tear_down() {
 
     if [[ -d "${deploy_dir}" ]]; then
         info "Stopping containers and removing volumes..."
-        podman-compose -f "${deploy_dir}/deploy/compose.yaml" ${compose_profiles[@]+"${compose_profiles[@]}"} down -v 2>/dev/null || true
+        podman_compose -f "${deploy_dir}/deploy/compose.yaml" ${compose_profiles[@]+"${compose_profiles[@]}"} down -v 2>/dev/null || true
 
         local project_name="${COMPOSE_PROJECT_NAME}"
         local remaining
@@ -377,23 +394,66 @@ validate_acm_cluster_provider() {
 
     ensure_provider_namespace "${kubeconfig}" "${namespace}" oc
 
-    # Resolve pull secret for the SP. Order:
-    #   1. ACM_CLUSTER_SP_PULL_SECRET env var (already set by user)
-    #   2. Extract from the cluster's global pull-secret
-    if [[ -z "${ACM_CLUSTER_SP_PULL_SECRET:-}" ]]; then
-        info "Resolving pull secret from cluster..."
-        local pull_json
-        pull_json=$(oc --kubeconfig="${kubeconfig}" get secret pull-secret \
-            -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' 2>/dev/null || echo "")
-        if [[ -n "${pull_json}" ]]; then
-            ACM_CLUSTER_SP_PULL_SECRET="${pull_json}"
-            info "Pull secret resolved from openshift-config/pull-secret"
-        else
-            info "WARNING: Could not extract pull secret from cluster — SP may fail to start"
-            info "Set ACM_CLUSTER_SP_PULL_SECRET env var manually if needed"
-        fi
+    resolve_cluster_pull_secret "${kubeconfig}" || return 1
+}
+
+# Resolve pull secret for ACM / embedded cluster SP.
+# Prefer ACM_CLUSTER_SP_PULL_SECRET or SP_PULL_SECRET if already set; otherwise
+# extract base64 .dockerconfigjson from openshift-config/pull-secret.
+resolve_cluster_pull_secret() {
+    local kubeconfig="$1"
+
+    if [[ -n "${SP_PULL_SECRET:-}" ]]; then
+        export ACM_CLUSTER_SP_PULL_SECRET="${ACM_CLUSTER_SP_PULL_SECRET:-${SP_PULL_SECRET}}"
+        return 0
     fi
-    export ACM_CLUSTER_SP_PULL_SECRET="${ACM_CLUSTER_SP_PULL_SECRET:-}"
+    if [[ -n "${ACM_CLUSTER_SP_PULL_SECRET:-}" ]]; then
+        export SP_PULL_SECRET="${SP_PULL_SECRET:-${ACM_CLUSTER_SP_PULL_SECRET}}"
+        return 0
+    fi
+
+    info "Resolving pull secret from cluster..."
+    local pull_json
+    pull_json=$(oc --kubeconfig="${kubeconfig}" get secret pull-secret \
+        -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' 2>/dev/null || echo "")
+    if [[ -n "${pull_json}" ]]; then
+        export ACM_CLUSTER_SP_PULL_SECRET="${pull_json}"
+        export SP_PULL_SECRET="${pull_json}"
+        info "Pull secret resolved from openshift-config/pull-secret"
+        return 0
+    fi
+
+    err "Could not resolve cluster pull secret (openshift-config/pull-secret)"
+    err "Set SP_PULL_SECRET or ACM_CLUSTER_SP_PULL_SECRET to a base64-encoded .dockerconfigjson"
+    return 1
+}
+
+# Prepare required env for embedded cluster SP (fail-fast before compose up).
+prepare_embedded_cluster_sp() {
+    local kubeconfig="$1"
+
+    SP_CLUSTER_NAMESPACE="${SP_CLUSTER_NAMESPACE:-clusters}"
+    export SP_CLUSTER_NAMESPACE
+    info "Embedded cluster SP namespace: ${SP_CLUSTER_NAMESPACE}"
+    ensure_provider_namespace "${kubeconfig}" "${SP_CLUSTER_NAMESPACE}" oc || return 1
+
+    resolve_cluster_pull_secret "${kubeconfig}" || return 1
+    if [[ -z "${SP_PULL_SECRET:-}" ]]; then
+        err "SP_PULL_SECRET is required when embedding the cluster SP"
+        return 1
+    fi
+}
+
+# Return 0 if AGENT_EMBEDDED_SPS contains the given service type token.
+agent_embeds() {
+    local want="$1"
+    local tok
+    IFS=',' read -r -a _agent_embed_toks <<< "${AGENT_EMBEDDED_SPS}"
+    for tok in "${_agent_embed_toks[@]}"; do
+        tok="${tok// /}"
+        [[ "${tok}" == "${want}" ]] && return 0
+    done
+    return 1
 }
 
 validate_osac_provider() {
@@ -601,8 +661,8 @@ verify_health() {
 
     info "Checking container readiness..."
     local expected_services running_services
-    expected_services=$(podman-compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} config --services 2>/dev/null | sort)
-    running_services=$(podman-compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} ps 2>/dev/null | awk 'NR>1 {print $NF}' | sed 's/.*_\(.*\)_[0-9]*/\1/' | sort)
+    expected_services=$(podman_compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} config --services 2>/dev/null | sort)
+    running_services=$(podman_compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} ps 2>/dev/null | awk 'NR>1 {print $NF}' | sed 's/.*_\(.*\)_[0-9]*/\1/' | sort)
 
     local container_failures=()
     while IFS= read -r service; do
@@ -646,6 +706,33 @@ verify_health() {
             health_failures+=("${endpoint}")
         fi
     done
+
+    if [[ "${WITH_ENVIRONMENT_AGENT}" == true ]]; then
+        local agent_url="http://localhost:${AGENT_PORT}"
+        info "Polling environment-agent health endpoints (timeout: ${HEALTH_TIMEOUT_SECONDS}s)..."
+        for endpoint in "${AGENT_HEALTH_ENDPOINTS[@]}"; do
+            local healthy=false
+            local attempt_elapsed=0
+            local http_code="000"
+
+            while [[ "${attempt_elapsed}" -lt "${HEALTH_TIMEOUT_SECONDS}" ]]; do
+                http_code=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" "${agent_url}${endpoint}" 2>/dev/null || echo "000")
+                if [[ "${http_code}" =~ ^2[0-9]{2}$ ]]; then
+                    healthy=true
+                    break
+                fi
+                sleep "${HEALTH_POLL_INTERVAL}"
+                attempt_elapsed=$((attempt_elapsed + HEALTH_POLL_INTERVAL))
+            done
+
+            if [[ "${healthy}" == true ]]; then
+                info "  PASS  agent ${endpoint}"
+            else
+                info "  FAIL  agent ${endpoint} (last HTTP ${http_code})"
+                health_failures+=("agent:${endpoint}")
+            fi
+        done
+    fi
 
     echo
     if [[ ${#health_failures[@]} -gt 0 ]]; then
@@ -718,7 +805,7 @@ get_running_versions() {
     log "Collecting running container versions"
 
     local container_ids
-    container_ids=$(podman-compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} ps -q 2>/dev/null)
+    container_ids=$(podman_compose -f "${compose_file}" ${compose_profiles[@]+"${compose_profiles[@]}"} ps -q 2>/dev/null)
 
     if [[ -z "${container_ids}" ]]; then
         err "No running containers found"
@@ -892,6 +979,29 @@ ensure_deploy_env() {
     if [[ -n "${ACM_CLUSTER_SP_PULL_SECRET:-}" ]]; then
         upsert_deploy_env_var "${deploy_dir}" "ACM_CLUSTER_SP_PULL_SECRET" "${ACM_CLUSTER_SP_PULL_SECRET}"
     fi
+
+    if [[ "${WITH_ENVIRONMENT_AGENT}" == true ]]; then
+        upsert_deploy_env_var "${deploy_dir}" "AGENT_EMBEDDED_SPS" "${AGENT_EMBEDDED_SPS}"
+        upsert_deploy_env_var "${deploy_dir}" "AGENT_NAME" "$(env_or_default AGENT_NAME local-agent)"
+        upsert_deploy_env_var "${deploy_dir}" "AGENT_ENVIRONMENT" "$(env_or_default AGENT_ENVIRONMENT dev)"
+        upsert_deploy_env_var "${deploy_dir}" "AGENT_COST" "$(env_or_default AGENT_COST low)"
+        upsert_deploy_env_var "${deploy_dir}" "AGENT_PORT" "${AGENT_PORT}"
+        # Absolute host path for the compose bind mount (SP_DEFAULT_KUBECONFIG=/kubeconfig in compose).
+        upsert_deploy_env_var "${deploy_dir}" "AGENT_KUBECONFIG_HOST" "${DCM_KUBECONFIG}"
+        upsert_deploy_env_var "${deploy_dir}" "SP_CONTAINER_NAMESPACE" "$(env_or_default SP_CONTAINER_NAMESPACE default)"
+        upsert_deploy_env_var "${deploy_dir}" "SP_K8S_EXTERNAL_SVC_TYPE" "$(env_or_default SP_K8S_EXTERNAL_SVC_TYPE NodePort)"
+        upsert_deploy_env_var "${deploy_dir}" "SP_VM_NAMESPACE" "$(env_or_default SP_VM_NAMESPACE default)"
+        upsert_deploy_env_var "${deploy_dir}" "SP_STORAGE_NAMESPACE" "$(env_or_default SP_STORAGE_NAMESPACE default)"
+        if agent_embeds cluster; then
+            # Required by embedded acmcluster config — never leave empty placeholders
+            # from .env.example (empty SP_PULL_SECRET causes agent exit 1).
+            upsert_deploy_env_var "${deploy_dir}" "SP_CLUSTER_NAMESPACE" "${SP_CLUSTER_NAMESPACE:-clusters}"
+            upsert_deploy_env_var "${deploy_dir}" "SP_PULL_SECRET" "${SP_PULL_SECRET:-${ACM_CLUSTER_SP_PULL_SECRET}}"
+            if [[ -n "${SP_BASE_DOMAIN:-}" ]]; then
+                upsert_deploy_env_var "${deploy_dir}" "SP_BASE_DOMAIN" "${SP_BASE_DOMAIN}"
+            fi
+        fi
+    fi
 }
 
 # Collect compose args (profiles and overrides) for an enabled provider.
@@ -940,6 +1050,9 @@ OPENSHIFT_USERNAME="${OPENSHIFT_USERNAME:-kubeadmin}"
 OPENSHIFT_PASSWORD="${OPENSHIFT_PASSWORD:-}"
 AUTH_ENABLED_EXPLICIT=false
 COMPOSE_EXTRA_FILE_ARGS=()
+WITH_ENVIRONMENT_AGENT=false
+AGENT_EMBEDDED_SPS="${AGENT_EMBEDDED_SPS:-}"
+AGENT_PORT="${AGENT_PORT:-${DEFAULT_AGENT_PORT}}"
 
 require_arg() {
     if [[ -z "${2:-}" ]] || [[ "$2" == --* ]]; then
@@ -993,6 +1106,14 @@ while [[ $# -gt 0 ]]; do
             shift ;;
         --gitops)
             GITOPS_ENABLED=true; shift ;;
+        --with-environment-agent)
+            WITH_ENVIRONMENT_AGENT=true; shift ;;
+        --agent-embedded-sps)
+            require_arg "$1" "${2:-}"
+            AGENT_EMBEDDED_SPS="${2:-}"; shift 2 ;;
+        --agent-port)
+            require_arg "$1" "${2:-}"
+            AGENT_PORT="${2:-}"; shift 2 ;;
         --deploy-cnv)
             DEPLOY_CNV=true; shift ;;
         --deploy-osac-backend)
@@ -1113,7 +1234,27 @@ if [[ "${RUNNING_VERSIONS}" == true || "${TEAR_DOWN}" == true ]] &&
 fi
 
 if [[ "${AUTH_ENABLED}" == true ]]; then
+    # Authentication services are defined in a separate compose file. The
+    # profile only selects services from files already loaded by Compose; it
+    # does not load compose.auth.yaml by itself.
+    # Put the built-in auth overlay first so user/provider overrides retain
+    # the documented precedence of later compose files.
+    COMPOSE_EXTRA_FILE_ARGS=(
+        "-f" "${CONTROL_PLANE_TMP_DIR}/deploy/compose.auth.yaml"
+        "${COMPOSE_EXTRA_FILE_ARGS[@]}"
+    )
     COMPOSE_PROFILES+=("--profile" "auth")
+fi
+
+# Detect environment-agent from an existing deployment for versions/teardown.
+if [[ "${RUNNING_VERSIONS}" == true || "${TEAR_DOWN}" == true ]] &&
+    [[ -f "${CONTROL_PLANE_TMP_DIR}/deploy/.env" ]] &&
+    grep -Eq "^AGENT_EMBEDDED_SPS[[:space:]]*=" "${CONTROL_PLANE_TMP_DIR}/deploy/.env"; then
+    WITH_ENVIRONMENT_AGENT=true
+fi
+
+if [[ "${WITH_ENVIRONMENT_AGENT}" == true ]]; then
+    COMPOSE_PROFILES+=("--profile" "environment-agent")
 fi
 
 # --- Running versions (standalone) ----------------------------------------- #
@@ -1153,10 +1294,75 @@ for i in $(seq 0 $((PROV_COUNT - 1))); do
     resolve_provider_cli "${i}"
 done
 
+# Embedded cluster SP calls oc (namespace + pull-secret) after this check.
+if [[ "${WITH_ENVIRONMENT_AGENT}" == true ]] && agent_embeds cluster; then
+    REQUIRED_TOOLS+=(oc)
+fi
+
 check_required_tools "${REQUIRED_TOOLS[@]}" || exit 1
 info "All prerequisites found: ${REQUIRED_TOOLS[*]}"
 
 ensure_podman_running || exit 1
+
+# Agent needs a cluster kubeconfig for the bind mount (OCP path; no Kind).
+if [[ "${WITH_ENVIRONMENT_AGENT}" == true ]]; then
+    if [[ -z "${AGENT_EMBEDDED_SPS}" ]]; then
+        err "--with-environment-agent requires --agent-embedded-sps (e.g. container,vm)"
+        exit 1
+    fi
+
+    # Reject overlapping standalone SPs that the agent already embeds.
+    # Mapping: embedded name → provider flag substring / label.
+    declare -A EMBEDDED_TO_STANDALONE=(
+        [container]="k8s-container"
+        [vm]="kubevirt"
+        [cluster]="acm-cluster"
+        [storage]="k8s-storage"
+        [network]="k8s-network"
+    )
+    IFS=',' read -r -a EMBEDDED_LIST <<< "${AGENT_EMBEDDED_SPS}"
+    for embedded in "${EMBEDDED_LIST[@]}"; do
+        embedded="${embedded// /}"
+        [[ -n "${embedded}" ]] || continue
+        standalone_label="${EMBEDDED_TO_STANDALONE[${embedded}]:-}"
+        if [[ -z "${standalone_label}" ]]; then
+            err "Unknown embedded SP '${embedded}'. Expected: container,vm,cluster,storage,network"
+            exit 1
+        fi
+        for i in $(seq 0 $((PROV_COUNT - 1))); do
+            [[ "${PROV_ENABLED[$i]}" == true ]] || continue
+            if [[ "${PROV_LABELS[$i]}" == "${standalone_label}"* ]]; then
+                err "Cannot combine --with-environment-agent (embedded '${embedded}') with standalone --${PROV_FLAGS[$i]}"
+                err "Either use the agent embedded SP or the standalone provider profile, not both."
+                exit 1
+            fi
+        done
+    done
+
+    # Host port clash: agent defaults to 8081, same as compose-kubevirt-sp.yaml —
+    # reject even when 'vm' is not embedded (capability overlap is handled above).
+    for i in $(seq 0 $((PROV_COUNT - 1))); do
+        [[ "${PROV_ENABLED[$i]}" == true ]] || continue
+        [[ "${PROV_LABELS[$i]}" == kubevirt* ]] || continue
+        if [[ "${AGENT_PORT}" == "${DEFAULT_AGENT_PORT}" ]]; then
+            err "Cannot combine --with-environment-agent (AGENT_PORT=${AGENT_PORT}) with standalone --${PROV_FLAGS[$i]}"
+            err "Both publish host port ${DEFAULT_AGENT_PORT}. Pass --agent-port with a different port (e.g. 18081)."
+            exit 1
+        fi
+    done
+
+    resolve_kubeconfig || exit 1
+    # Compose bind mounts need an absolute host path.
+    if [[ "${DCM_KUBECONFIG}" != /* ]]; then
+        DCM_KUBECONFIG="$(cd "$(dirname "${DCM_KUBECONFIG}")" && pwd)/$(basename "${DCM_KUBECONFIG}")"
+    fi
+
+    # Embedded cluster SP needs namespace + pull secret before compose up
+    # (standalone ACM validation is skipped on the agent path).
+    if agent_embeds cluster; then
+        prepare_embedded_cluster_sp "${DCM_KUBECONFIG}" || exit 1
+    fi
+fi
 
 # Resolve cluster credentials only when a provider needs cluster access or ACM/MCE deploy is enabled
 any_provider_needs_cluster() {
@@ -1435,7 +1641,7 @@ log "Preparing deploy directory: ${CONTROL_PLANE_TMP_DIR}"
 
 if [[ -d "${CONTROL_PLANE_TMP_DIR}" ]]; then
     info "Cleaning existing deploy directory..."
-    podman-compose -f "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} down -v 2>/dev/null || true
+    podman_compose -f "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} down -v 2>/dev/null || true
     rm -rf "${CONTROL_PLANE_TMP_DIR}"
 fi
 
@@ -1493,14 +1699,18 @@ done
 if [[ ${#ENABLED_LABELS[@]} -gt 0 ]]; then
     info "Enabled providers: ${ENABLED_LABELS[*]}"
 fi
+if [[ "${WITH_ENVIRONMENT_AGENT}" == true ]]; then
+    info "Environment agent enabled (embedded SPs: ${AGENT_EMBEDDED_SPS})"
+fi
 if [[ "${AUTH_ENABLED}" == true ]]; then
     info "Authentication enabled (compose profile: auth)"
 fi
-podman-compose -f "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} up -d
+# Single bring-up: platform services + optional --profile environment-agent together.
+podman_compose -f "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} up -d
 
 echo
 log "Container status"
-podman-compose -f "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} ps
+podman_compose -f "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} ps
 
 verify_health "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EXTRA_FILE_ARGS[@]+"${COMPOSE_EXTRA_FILE_ARGS[@]}"} ${COMPOSE_PROFILES[@]+"${COMPOSE_PROFILES[@]}"} || exit 1
 
@@ -1508,6 +1718,9 @@ get_running_versions "${CONTROL_PLANE_TMP_DIR}/deploy/compose.yaml" ${COMPOSE_EX
 
 GATEWAY_URL="http://localhost:${CONTROL_PLANE_PORT}"
 log "DCM stack is up and healthy at ${GATEWAY_URL}"
+if [[ "${WITH_ENVIRONMENT_AGENT}" == true ]]; then
+    info "Environment agent API: http://localhost:${AGENT_PORT}"
+fi
 if [[ "${CONTROL_PLANE_TMP_DIR}" != "${DEFAULT_CONTROL_PLANE_TMP_DIR}" ]]; then
     info "To tear down: $(basename "$0") --control-plane-dir ${CONTROL_PLANE_TMP_DIR} --tear-down"
 else
