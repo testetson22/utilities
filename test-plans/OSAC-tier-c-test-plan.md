@@ -18,7 +18,7 @@ Upstream Tier B is **kind** + real Postgres/Keycloak/fulfillment-service (`TC-TB
 | [FLPATH-4758](https://redhat.atlassian.net/browse/FLPATH-4758) | Test Plan epic | Parent for OSAC SP E2E work in utilities / osac-sp |
 | [FLPATH-4760](https://redhat.atlassian.net/browse/FLPATH-4760) | Closest existing story | Originally “OCP + real OSAC backend E2E”. Utilities’ OCP Tier B stack port + API lifecycle already covers a large middle slice of that; **Tier C** is the remaining real-MOC/AAP/BMC path. Prefer updating 4760’s DoD to that split, or filing a new child under 4758 for Tier C |
 | [FLPATH-4759](https://redhat.atlassian.net/browse/FLPATH-4759) | Sibling (out of scope) | Tier A — kind + mock-provider; lives primarily in `osac-service-provider` |
-| [FLPATH-4924](https://redhat.atlassian.net/browse/FLPATH-4924) | Product blocker (under 4459; currently under review) | `GET /clusters/{id}` returns 500 for ACTIVE clusters (`GetKubeconfig` removed). Blocks SP-GET-based TC-TC-125/130/135 until the fix is merged and deployed; Kubernetes CR/NATS evidence may still be inspected independently. Re-run the affected SP-GET assertions after the fix lands. |
+| [FLPATH-4924](https://redhat.atlassian.net/browse/FLPATH-4924) | Resolved product blocker | Issue #14 is closed and the ACTIVE/kubeconfig behavior was verified manually. Long-running real provisioning was not executed in this validation window; rerun TC-TC-125/130/135 when a suitable lifecycle environment is available. |
 | *(file under 4758)* | Tier C CI pipeline | Replaces the former `FLPATH-TBD` placeholder in Future CI Integration — create when MOC CI env is available |
 
 ## Overview

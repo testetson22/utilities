@@ -1,4 +1,4 @@
-.PHONY: help e2e-up test-e2e test-smoke test-cli test-sp test-acm-sp test-kubevirt-sp test-osac-sp test-core test-rehydration test-rehydration-safe test-rehydration-cli e2e-down test-e2e-full download-cli cli-version lint
+.PHONY: help e2e-up test-e2e test-smoke test-cli test-sp test-acm-sp test-kubevirt-sp test-osac-sp test-osac-dispatch test-core test-rehydration test-rehydration-safe test-rehydration-cli e2e-down test-e2e-full download-cli cli-version lint
 
 # Set JUNIT_REPORT to a filename to produce JUnit XML output.
 # Example: make test-e2e JUNIT_REPORT=results.xml

@@ -94,6 +94,43 @@ Both deploy mode and `--running-versions` produce a `dcm-versions.json` mapping 
 
 Run `./scripts/deploy-dcm.sh --help` for all flags and environment variable overrides.
 
+## OSAC SP Test Modes
+
+Deploy the OSAC SP with the real fulfillment-service and run the normal SP contract suite:
+
+```bash
+./scripts/deploy-dcm.sh --environment-agent --osac-service-provider
+make test-osac-sp
+```
+
+The default `make test-osac-sp` target excludes the OCP-backed Tier B++ dispatch suite.
+Run that boundary explicitly:
+
+```bash
+make test-osac-dispatch
+```
+
+Use real AAP only when the disposable/licensed AAP integration is required:
+
+```bash
+./scripts/deploy-dcm.sh --deploy-osac-backend --osac-aap-mode real \
+  --environment-agent --osac-service-provider
+OSAC_E2E_CLUSTER_TEMPLATE_ID=default-hcp make test-osac-dispatch
+```
+
+Use the deterministic fulfillment-service simulator for SP state and error mapping:
+
+```bash
+SIMULATOR_SCENARIO=failed \
+./scripts/deploy-dcm.sh --osac-fulfillment-mode simulator \
+  --environment-agent --osac-service-provider
+OSAC_FULFILLMENT_MODE=simulator SIMULATOR_SCENARIO=failed make test-osac-sp
+```
+
+Supported simulator scenarios include `ready`, `failed`, `backend-unavailable`,
+`backend-timeout`, `delete-delayed`, and `vm-running`. The simulator validates the SP
+contract only; it does not replace Agent, BMFO, AAP, BMC, or HostedCluster testing.
+
 The optional `--gitops` flag adds the published `quay.io/dcm-project/dcm-gitops` container
 to the Compose stack. The reconciler shares the control-plane PostgreSQL database and
 stores cloned repositories in a named `gitops_data` volume. Set `DCM_GITOPS_VERSION` to

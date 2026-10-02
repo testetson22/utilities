@@ -258,6 +258,30 @@ var _ = Describe("OSAC SP — NATS Status Events", Label("sp", "osac", "nats"), 
 	// ------------------------------------------------------------------ #
 
 	Context("VM status events", Label("vm"), func() {
+		It("projects simulator RUNNING state with deterministic IPs", func() {
+			requireSimulatorScenario("vm-running")
+			name := uniqueName("e2e-osac-sim-vm")
+			payload := fmt.Sprintf(`{"spec":{"metadata":{"name":"%s"},"provider_hints":{"osac":{"template_id":"simulator-vm","instance_type":"simulator-small"}},"guest_os_type":"linux","storage":{"disks":[{"name":"boot","capacity":"50GB"}]}}}`, name)
+			resp, err := doOsacVMRequest(http.MethodPost, fmt.Sprintf("/vms?id=%s", name), payload)
+			Expect(err).NotTo(HaveOccurred())
+			var created osacCreateResponse
+			decodeJSON(resp, &created)
+			resp.Body.Close()
+			vmID := osacIDFromCreateResponse(created)
+			Expect(vmID).NotTo(BeEmpty())
+			defer deleteTestOsacVM(vmID)
+
+			getResp, err := doOsacVMRequest(http.MethodGet, "/vms/"+vmID, "")
+			Expect(err).NotTo(HaveOccurred())
+			defer getResp.Body.Close()
+			var vm osacVM
+			decodeJSON(getResp, &vm)
+			Expect(vm.Status).To(Equal("RUNNING"))
+			Expect(vm.InternalIPAddress).NotTo(BeNil())
+			Expect(*vm.InternalIPAddress).To(Equal("192.0.2.10"))
+			Expect(vm.ExternalIPAddress).NotTo(BeNil())
+			Expect(*vm.ExternalIPAddress).To(Equal("198.51.100.10"))
+		})
 
 		It("publishes a CloudEvent on dcm.vm when a VM is created", func() {
 			if os.Getenv("OSAC_E2E_VM_TEMPLATE_ID") == "" {
