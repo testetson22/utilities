@@ -72,6 +72,32 @@ Redundant controllers on compact nodes provide controller/pod-level testing only
 host HA. Physical-host failure testing belongs to DCM platform-resilience coverage and is outside
 this OSAC SP plan.
 
+### Jira Coverage Assessment
+
+This plan tracks the current coverage position for the linked work items. Percentages are
+requirement-coverage estimates, not pass rates.
+
+| Work item | Current coverage | Remaining scope |
+|-----------|------------------|-----------------|
+| [FLPATH-4758](https://redhat.atlassian.net/browse/FLPATH-4758) OSAC SP test plan | Approximately 85–90% of the SP contract and 80–85% of real fulfillment-service/Tier B++ integration | Simulator CI productization, remaining contract edge cases, and Tier C lifecycle coverage |
+| [FLPATH-4760](https://redhat.atlassian.net/browse/FLPATH-4760) OCP/backend E2E | Approximately 80–85% of real OCP, SP, fulfillment-service, NATS, and Tier B++ dispatch scope | Jenkins/MOC CI automation and real Agent/BMFO/Ironic/HostedCluster lifecycle |
+| [FLPATH-4924](https://redhat.atlassian.net/browse/FLPATH-4924) ACTIVE/kubeconfig | Issue #14 is closed and ACTIVE/kubeconfig behavior was manually verified | Long-running real provisioning lifecycle was not executed; rerun when a suitable lifecycle environment is available |
+| [FLPATH-4945](https://redhat.atlassian.net/browse/FLPATH-4945) pagination validation | Reproduced and filed; regression assertion is enabled | OSAC SP must reject `max_page_size > 100` with HTTP 400/problem+json |
+
+**Overall boundary:** the current work provides approximately 85% coverage of the OSAC SP
+contract and approximately 80% coverage of the real OCP/Tier B++ integration objective.
+CI/environment productization is approximately 30–40% complete, while full infrastructure
+lifecycle coverage is approximately 10–20% complete. These estimates intentionally separate
+SP-owned validation from core OSAC and infrastructure responsibilities.
+
+**SP-owned coverage is substantially complete for:** request validation and translation,
+registration, health, CRUD/idempotency, status projection, CloudEvents/NATS, deterministic
+failure/error scenarios, real fulfillment-service dispatch, and real-AAP job-boundary evidence.
+
+**Remaining core/infrastructure scope:** Agent registration and selection, BMFO/BMI/BMH
+allocation, Ironic/BMC provisioning, HostedCluster/NodePool readiness, VM networking, and
+long-running real provisioning. These are not required to pass the SP contract gate.
+
 ### When to Run
 
 Tier C is **not a per-PR gate**. Run it:
