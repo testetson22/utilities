@@ -187,6 +187,23 @@ Real MOC/OSAC credentials **must not** be committed to git.
 - Tier B `tierb-*` static credentials are never used in Tier C.
 - Rotate Tier C credentials on the same schedule as the MOC environment's policy.
 
+### Future Security Hardening
+
+The current Tier B test environment is isolated and uses documented test-only credentials.
+Before shared CI or concurrent developer use, track these follow-ups:
+
+- Move the AAP subscription manifest from local ignored files into Vault or equivalent
+  secret storage; inject it only at runtime and never commit it.
+- Rotate any AAP Gateway PAT or generated test credential exposed during diagnostics.
+- Replace fixed launchd port-forward scripts, logs, and PID paths with per-run restricted
+  temporary directories that survive only until the agents are stopped.
+- Prefer release-specific names for cluster-scoped APIService, ClusterIssuer, RBAC, and
+  related resources to avoid cross-run collisions.
+- Remove `insecureSkipVerify` from any deployment path intended beyond isolated test use;
+  mount and validate the correct CA instead.
+- Continue labeling and ownership-checking every shared namespace and cluster-scoped
+  resource before mutation or teardown.
+
 ---
 
 ## Relationship to Tier B
