@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 const (
@@ -120,7 +122,29 @@ type osacCluster struct {
 // The OSAC SP follows AEP-132 and wraps the list in a "results" key,
 // consistent with the VM list endpoint. (Verified against live SP.)
 type osacClusterListResponse struct {
-	Results []osacCluster `json:"results"`
+	Results       []osacCluster `json:"results"`
+	NextPageToken string        `json:"next_page_token,omitempty"`
+}
+
+func listAllOsacClusters() []osacCluster {
+	var all []osacCluster
+	token := ""
+	for {
+		path := "/clusters?max_page_size=100"
+		if token != "" {
+			path += "&page_token=" + url.QueryEscape(token)
+		}
+		resp, err := doOsacClusterRequest(http.MethodGet, path, "")
+		Expect(err).NotTo(HaveOccurred())
+		var page osacClusterListResponse
+		decodeJSON(resp, &page)
+		resp.Body.Close()
+		all = append(all, page.Results...)
+		if page.NextPageToken == "" {
+			return all
+		}
+		token = page.NextPageToken
+	}
 }
 
 // osacVM is a single VM resource from GET /vms/{id} or a list entry.

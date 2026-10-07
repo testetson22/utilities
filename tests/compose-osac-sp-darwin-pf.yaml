@@ -37,17 +37,17 @@ services:
       # derives the token issuer from the Host header, so tokens get the svc.cluster.local
       # issuer URL which the fulfillment-service trusts. Port-forwarded to OCP ffs-keycloak:8443
       # (port 8443 > 1024 — no sudo needed).
-      - "ffs-keycloak.osac-test-backend.svc.cluster.local:192.168.127.254"
+      - "ffs-keycloak.${OSAC_BACKEND_NAMESPACE:-osac-test-backend}.svc.cluster.local:192.168.127.254"
       # gRPC: internal service hostname (cert SANs include this; OCP route cert does not).
       # Port-forwarded to OCP fulfillment-grpc-server:8000.
-      - "fulfillment-grpc-server.osac-test-backend:192.168.127.254"
+      - "fulfillment-grpc-server.${OSAC_BACKEND_NAMESPACE:-osac-test-backend}:192.168.127.254"
     environment:
       # Keycloak in-cluster URL — matches the fulfillment-service's configured trusted issuer:
       #   auth.issuerUrl: https://ffs-keycloak.<ns>.svc.cluster.local:8443/realms/osac
       # Keycloak's cert is valid for ffs-keycloak.osac-test-backend.svc.cluster.local (SAN).
-      SP_OSAC_OIDC_ISSUER_URL: "https://ffs-keycloak.osac-test-backend.svc.cluster.local:8443/realms/osac"
+      SP_OSAC_OIDC_ISSUER_URL: "https://ffs-keycloak.${OSAC_BACKEND_NAMESPACE:-osac-test-backend}.svc.cluster.local:8443/realms/osac"
       # gRPC: internal service hostname, cert valid, port-forwarded at 19443
-      SP_OSAC_FULFILLMENT_ADDRESS: "fulfillment-grpc-server.osac-test-backend:19443"
+      SP_OSAC_FULFILLMENT_ADDRESS: "fulfillment-grpc-server.${OSAC_BACKEND_NAMESPACE:-osac-test-backend}:19443"
       # SP_OSAC_TLS_CERT_FILE covers gRPC TLS only. Go's TLS stack also reads SSL_CERT_FILE
       # for all other HTTPS connections (e.g. OIDC discovery). The cert is already mounted at
       # /etc/osac/ca.pem by the TLS overlay (compose-osac-sp-tls.yaml).

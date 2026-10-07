@@ -562,14 +562,7 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 		})
 
 		It("list includes the created cluster", func() {
-			resp, err := doOsacClusterRequest(http.MethodGet, "/clusters", "")
-			Expect(err).NotTo(HaveOccurred())
-			defer resp.Body.Close()
-			Expect(resp.StatusCode).To(Equal(http.StatusOK))
-
-			var listResp osacClusterListResponse
-			decodeJSON(resp, &listResp)
-			Expect(listResp.Results).To(ContainElement(HaveField("ID", clusterID)),
+			Expect(listAllOsacClusters()).To(ContainElement(HaveField("ID", clusterID)),
 				"created cluster %s should appear in the list", clusterID)
 		})
 
@@ -596,14 +589,7 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 		})
 
 		It("deleted cluster no longer appears in the list", func() {
-			resp, err := doOsacClusterRequest(http.MethodGet, "/clusters", "")
-			Expect(err).NotTo(HaveOccurred())
-			defer resp.Body.Close()
-			Expect(resp.StatusCode).To(Equal(http.StatusOK))
-
-			var listResp osacClusterListResponse
-			decodeJSON(resp, &listResp)
-			for _, cl := range listResp.Results {
+			for _, cl := range listAllOsacClusters() {
 				Expect(cl.ID).NotTo(Equal(clusterID),
 					"deleted cluster %s must not appear in the list", clusterID)
 			}
