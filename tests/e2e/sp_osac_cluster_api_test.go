@@ -319,15 +319,18 @@ var _ = Describe("OSAC SP — Cluster API", Label("sp", "osac"), func() {
 				"max_page_size=0 must return 200 (treat as server default per AEP-132), not %d", resp.StatusCode)
 		})
 
-		It("rejects max_page_size > 100 with 400 (AEP-132)", func() {
+		It("coerces max_page_size > 100 to the contract maximum", func() {
 			resp, err := doOsacClusterRequest(http.MethodGet, "/clusters?max_page_size=101", "")
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusBadGateway {
-				Skip("OSAC backend not reachable (502) — cannot verify max_page_size>100 rejection")
+				Skip("OSAC backend not reachable (502) — cannot verify max_page_size>100 coercion")
 			}
-			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest),
-				"max_page_size > 100 must be rejected per AEP-132")
+			Expect(resp.StatusCode).To(Equal(http.StatusOK),
+				"max_page_size > 100 must be accepted and coerced to 100")
+			var page osacClusterListResponse
+			decodeJSON(resp, &page)
+			Expect(len(page.Results)).To(BeNumerically("<=", 100))
 		})
 
 	})

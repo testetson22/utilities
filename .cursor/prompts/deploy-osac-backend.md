@@ -160,7 +160,7 @@ only changes which AAP endpoint the operator uses.
 - The backend deploys the Phase 2 Tier B++ components (`osac-operator`, BMFO, `osac-aap-mock`, and fixtures) by default. It does not provide real Agents, AAP execution, or physical provisioning; those remain Tier C prerequisites.
 - `OSAC_E2E_CLUSTER_TEMPLATE_ID` / `OSAC_E2E_VM_TEMPLATE_ID` are not auto-discovered — obtain them from the fulfillment-service admin API/CLI against this backend and export them before running full CRUD tests
 - Full CRUD dispatch requires the `osac-service-provider:main` image to have real Create/Get support implemented — check [FLPATH-4459](https://redhat.atlassian.net/browse/FLPATH-4459) if CRUD tests fail unexpectedly against `:main`
-- The fulfillment-service backend does not enforce `max_page_size > 100` per AEP-132; the corresponding E2E test skips gracefully when the backend is reachable and returns 200
+- The OSAC SP normalizes `max_page_size > 100` to the contract maximum of 100; the corresponding E2E test verifies HTTP 200 with no more than 100 results
 
 ## Troubleshooting
 

@@ -82,7 +82,7 @@ requirement-coverage estimates, not pass rates.
 | [FLPATH-4758](https://redhat.atlassian.net/browse/FLPATH-4758) OSAC SP test plan | Approximately 85–90% of the SP contract and 80–85% of real fulfillment-service/Tier B++ integration | Simulator CI productization, remaining contract edge cases, and Tier C lifecycle coverage |
 | [FLPATH-4760](https://redhat.atlassian.net/browse/FLPATH-4760) OCP/backend E2E | Approximately 80–85% of real OCP, SP, fulfillment-service, NATS, and Tier B++ dispatch scope | Jenkins/MOC CI automation and real Agent/BMFO/Ironic/HostedCluster lifecycle |
 | [FLPATH-4924](https://redhat.atlassian.net/browse/FLPATH-4924) ACTIVE/kubeconfig | Issue #14 is closed and ACTIVE/kubeconfig behavior was manually verified | Long-running real provisioning lifecycle was not executed; rerun when a suitable lifecycle environment is available |
-| [FLPATH-4945](https://redhat.atlassian.net/browse/FLPATH-4945) pagination validation | Reproduced and filed; regression assertion is enabled | OSAC SP must reject `max_page_size > 100` with HTTP 400/problem+json |
+| [FLPATH-4945](https://redhat.atlassian.net/browse/FLPATH-4945) pagination validation | Fix is in QA; current main/RC images coerce oversized values | Verify `max_page_size > 100` returns HTTP 200 with no more than 100 results; retain this as a regression check |
 
 **Overall boundary:** the current work provides approximately 85% coverage of the OSAC SP
 contract and approximately 80% coverage of the real OCP/Tier B++ integration objective.
